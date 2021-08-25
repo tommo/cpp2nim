@@ -69,11 +69,26 @@ import textwrap
 import re
 from pprint import pprint
 
+def get_nim_arraytype( c_type, rename = {} ):
+    mo = re.match( '(.*)\[\s*(\d*)\s*\]', c_type )
+    if not mo: return c_type
+    etype = mo.group( 1 )
+    count = mo.group( 2 )
+    if count == '':
+        return f'ptr {get_nim_type( etype, rename )}'
+    else:
+        return f'array[{count},{get_nim_type( etype, rename )}]'
+
 def get_nim_type( c_type, rename = {} ):   
     c_type = c_type.strip()
+    if c_type.endswith( "]" ):
+        return get_nim_arraytype( c_type, rename )
 
     isVar = True
-    if c_type.startswith("const"):
+
+    if c_type.endswith("const *"):
+        c_type = c_type[:-7]+"*"
+    if c_type.startswith("const "):
         c_type = c_type[5:].strip()
         isVar = False
 
@@ -125,7 +140,8 @@ def get_nim_type( c_type, rename = {} ):
 
     if isVar:
         c_type = f"var {c_type}"
-
+    c_type = c_type.replace("enum ", "")
+    c_type = c_type.replace("struct ", "")
     # xxxx::yyyy<zzzzz> TODO: MODIFY <map>, [K]
     if "::" in c_type:
         kernel = re.compile("([^<]+)[<]*([^>]*)[>]*")
@@ -145,7 +161,13 @@ def get_nim_type( c_type, rename = {} ):
 
 
         #my_dict["type"][_tmp] = "#" + f'{_tmp}* {{.importcpp: "{_a}", header: "<map>".}} [K] = object'
-        if _tmp[-1] == "*":
+        # if _tmp.endswith( "const*" ):
+        #     _tmp = _tmp[0:-5] + "*"
+        # _tmp = _tmp.replace( "*const ", "*" )
+        # _tmp = _tmp.replace( "enum ", " " )
+        # _tmp = _tmp.replace( "struct ", " " )
+
+        while _tmp[-1] == "*":
             _tmp = f"ptr {_tmp[:-1]}"
         
         if _b != "":
@@ -157,14 +179,23 @@ def get_nim_type( c_type, rename = {} ):
                     _b[idx]  = f"ptr {_b[idx][:-1].strip()}"
             _b = ",".join(_b)
             _b = f"[{_b}]"
-        return f"{_tmp}{_b}"
+        c_type = f"{_tmp}{_b}"
+        return get_nim_type( c_type, rename )
 
     if "<" in c_type and ">" in c_type:
         c_type = c_type.replace("<", "[")
         c_type = c_type.replace(">", "]")
 
-    if c_type[-1] == "*":
-        c_type = f"ptr {c_type[:-1].strip()}"
+    c_type = c_type.strip()
+    while c_type[-1] == "*":
+        c_type = f"ptr {c_type[:-1]}"
+
+    if c_type.startswith( "ptr float" ):
+        c_type = "ptr cfloat"
+
+    if c_type.startswith( "ptr Char" ):
+        c_type = "cstring"
+    # print( ">>>>>>", c_type, len(c_type), c_type == 'ptr float' )
     return c_type
 
 
@@ -185,7 +216,7 @@ def clean(txt):
     if txt[-2:] == " &":
         txt = txt[:-2]
     if txt[0] == "_":
-        txt = "prefix" + txt[1:]
+        txt = "prefix_" + txt[1:]
     if txt in NIM_KEYWORDS:
         txt = f"`{txt}`"
     return txt
@@ -228,30 +259,72 @@ def get_template_parameters(methodname):  # ÑAPA
     else:
         return(methodname, '')
 
-def get_constructor(data,rename = {}):
-    _params = export_params(data["params"], rename)   
-    _tmp = ""
-    if _params != "":
-        _tmp = "(@)"
+def export_params_for_constructor(params, rename = {}):
+    output = []
+    n = 0
+    for p in params:
+        _part = ""
+        _hasDefault = False
+        if n > 0:
+            _part += ", "
+        if p[0]:
+            _part += clean(p[0]) + ": "
+        else:
+            _part += f'a{n:02d}: '
+        _type = get_nim_type(p[1], rename)
+        print( p )
+        if len(p) > 2:
+            if p[2] != None:
+                _hasDefault = True
+        _part += _type
+        output.append( ( _part, _hasDefault ) )
+        n += 1
+    return output 
 
-    # Templates
+def get_constructor(data,rename = {}, _dup={}):
+    _paramParts = export_params_for_constructor(data["params"], rename)
+    _tmp = ""
     methodname, templateparams = get_template_parameters(data["name"])
-    _tmp = f'proc construct{methodname}*{templateparams}({_params}): {data["class_name"]} {{.constructor,importcpp: "{data["fully_qualified"]}{_tmp}".}}\n'
-    _tmp += get_comment(data)  + "\n"
+    if len(_paramParts) == 0:
+        # no args
+        _tmp = f'proc new{methodname}*{templateparams}(): {data["class_name"]} {{.constructor,importcpp: "{data["fully_qualified"]}".}}\n'
+        _tmp += get_comment(data)  + "\n"
+    else:
+        #workaround for constant expr default parameters\
+        _paramsTest = export_params(data["params"], rename)   
+        print("constructor", data["class_name"], _paramsTest )
+
+        n = len( _paramParts )
+        k = 0
+        added = False
+        for r in range( n-1, 0, -1 ):
+            _outputparts = [ part[0] for part in _paramParts[0:r+1]]
+            _params = "".join( _outputparts )
+            _proc = f'proc new{methodname}*{templateparams}({_params}): {data["class_name"]} {{.constructor,importcpp: "{data["fully_qualified"]}(@)".}}\n'
+            if not _dup.get( _proc, None ):
+                _dup[_proc] = True
+                _tmp += _proc
+                added = True
+            if not _paramParts[r][1]: 
+                print("END at", _paramParts[r])
+                break
+        if added:
+            _tmp += get_comment(data)  + "\n"
+
     return _tmp    
 
-def get_method(data,rename = {}):
+def get_method(data,rename = {}, visited=None):
     # Parameters
     _params = export_params(data["params"], rename)
     if _params != "":
         _params = ", " + _params
 
     # - Bear in mind the 'in-place' case
-    _classname = data["class_name"]
-    if not data["const_method"]:
-        _classname = f"var {_classname}"
+    _classname = "ptr " + data["class_name"]
+    # if not data["const_method"]:
+    #     _classname = f"var {_classname}"
 
-    _params = f'this: {_classname}{_params}'
+    _params = f'self: {_classname}{_params}'
 
     # Returned type
     _return = ""
@@ -279,17 +352,23 @@ def get_method(data,rename = {}):
     
     # Templates
     _templParams = ""
-    if "templParams" in data:
-        if len(data["templParams"]) > 0:
-            _templParams = "[" + ";".join( data["templParams"] ) + "]"
+    if "template_params" in data:
+        if len(data["template_params"]) > 0:
+            _templParams = "[" + ";".join( data["template_params"] ) + "]"
+            
     _methodName = clean(_methodName)
     if _isOperator and _methodName in ["`=`"]:
         _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.importcpp: "{_importName}".}}\n'
+
     elif _isOperator and _methodName in ["`[]`"]:
         _importName = "#[#]"
         _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.importcpp: "{_importName}".}}\n'  
+
     else:
         _tmp = f'proc {_methodName}*{_templParams}({_params}){_return}  {{.importcpp: "{_importName}".}}\n'
+
+    if _tmp in visited: return False
+    visited.add( _tmp )
     _tmp += get_comment(data) + "\n"
     return _tmp
 
@@ -298,12 +377,14 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
     #if "underlying_deps" in data:
     #    print(data["underlying"])
     #else:
-    _type = get_nim_type( data["underlying"], rename )
+    underlying =  data["underlying"]
+    _type = get_nim_type( underlying, rename )
     _include = ""
     if include != None:
         _include = f'header: "{include}", '
-
-    if data["is_function_proto"]:
+    
+    _deftype = data["typedef_type"]
+    if _deftype == "function":
         # ActiveTextureProc* = proc (texture: GLenum)
         _return = ""
         if data["result"] not in ["void", "void *"]:
@@ -318,18 +399,32 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
         #if _params != "":
         #    _params = ", ".join(_params)
         
-        _tmp = f"proc ({_params}){_return}"
+        _tmp = f"proc ({_params}){_return} {{.cdecl.}}"
         _name = clean(name)
         _name = _name[0].upper() + _name[1:]
         
         return f'  {_name}* {{.{_include}importcpp: "{data["fully_qualified"]}".}} = {_tmp}\n'
+
+    # elif _deftype == "ref":
+    #     _name = clean(name)  
+    #     _name = _name[0].upper() + _name[1:]
+    #     # _data["underlying"]
+    #     if _type.startswith( 'struct ' ):
+    #         _type = 'Struct' + _type[7:]
+    #     return f'  {_name}* {{.{_include}importcpp: "{data["fully_qualified"]}".}} = {_type}\n'
+
     else:
         _name = clean(name)  
-        _name = _name[0].upper() + _name[1:]              
+        _name = _name[0].upper() + _name[1:]
+        if _type.startswith( 'struct ' ):
+            _type = _type[7:]
+
+        if _name == _type: #ignore struct/typedef with same name
+            return ''
         return f'  {_name}* {{.{_include}importcpp: "{data["fully_qualified"]}".}} = {_type}\n'
     #_data[_file]["typedefs"].append((i["name"], _type))
 
-def get_class(name, data, include = None, byref = True, rename = {}):
+def get_class(name, data, include = None, byref = True, rename = {}, inheritable=False):
     #)
     _include = ""
     if include != None:
@@ -339,12 +434,18 @@ def get_class(name, data, include = None, byref = True, rename = {}):
         _byref = ", bycopy"
     _inheritance = ""
     if len(data["base"]) > 0:
-        _inheritance = " #of "
-        _inheritance += data["base"][0]   # Nim does not support multiple inheritance
+        _inheritance = " of "
+        _inheritance += get_nim_type( data["base"][0], rename )   # Nim does not support multiple inheritance
 
     _nameClean = clean(name)
     _name = data["fully_qualified"]
     _template = ""
+
+    if inheritable :
+        _inheritable = "inheritable,"
+    else:
+        _inheritable = ""
+
     if len(data["template_params"]) > 0:
         _tmpList = []
         for i in data["template_params"]:
@@ -359,11 +460,13 @@ def get_class(name, data, include = None, byref = True, rename = {}):
         _template = f'[{"; ".join(_tmpList)}]'
 
         #_template = f'[{", ".join(data["template_params"])}] '
-    _tmp = f'  {_nameClean}*{_template} {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
+    _tmp = f'  {_nameClean}*{_template} {{.{_inheritable}{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
     _tmp += get_comment(data) + "\n"
     return _tmp    
 
-def get_struct(name, data, include = None, rename={}):
+def get_struct(name, data, include = None, rename={}, inheritable = False ):
+    if data["incomplete" ]:
+        return ''
     _include = ""
     if include != None:
         _include = f'header: "{include}", '
@@ -371,6 +474,14 @@ def get_struct(name, data, include = None, rename={}):
 
     _nameClean = clean(name)
     _name = data["fully_qualified"]
+    # print( data )
+
+    _inheritance = ""
+    if len(data["base"]) > 0:
+        _inheritance = " of "
+        base = get_nim_type( data["base"][0], rename )
+        _inheritance += base  # Nim does not support multiple inheritance
+
     _template = ""
     """
     if len(data["template_params"]) > 0:
@@ -386,7 +497,20 @@ def get_struct(name, data, include = None, rename={}):
         #_template = f'[{", ".join(data["template_params"])}] '
     """
     #_tmp = f'  {_nameClean}*{_template} {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
-    _tmp = f'  {_nameClean}* {{.{_include}importcpp: "{_name}".}} = object\n'
+    if inheritable :
+        _inheritable = "inheritable,"
+    else:
+        _inheritable = ""
+
+    _tmp = f'  {_nameClean}* {{.{_inheritable}{_include}importcpp: "{_name}".}} = object{_inheritance}\n'
+    # print( '>>', name )
+    for f in data["fields"]:
+        # print( " ..", f )
+        fname = f["name"]
+        if not fname: continue
+        fname = clean( fname )
+        tname = get_nim_type( f["type"], rename )
+        _tmp += f'    {fname}* : {tname}\n'    
     _tmp += get_comment(data) + "\n"
     return _tmp
 
@@ -515,8 +639,9 @@ def get_template_dependencies(tmp):
         result = _tmp           
     return result
 
-def export_txt(filename, data,  root= "/", rename = {}):
+def export_txt(filename, data,  root= "/", rename = {}, ignore={}, inheritable={}):
     _txt = ""
+    _txt += "import builtin_types\n"
     #if "AlphaFunc" in filename:
     #    _t = [i for i in data if "AlphaFunc" in i[0]]
     #    _t = [i for i in data if filename == i[0]]        
@@ -565,24 +690,44 @@ def export_txt(filename, data,  root= "/", rename = {}):
     # Enums
     _enums = [i for i in data if i[0] == filename and i[2] == "enum"] 
     for _, _filename, _, name, values in _enums:
+        if ignore and ( name in ignore): continue
         _fname = os.path.relpath( _filename, root )
         _txt += get_enum( name, values, _fname, rename = rename)
 
-    # Classes
-    _classes = [(i[1], i[3],i[4]) for i in data if i[0] == filename and i[2] == "class"]     
-    for _filename, name, values in _classes:
-        _fname = os.path.relpath( _filename, root )
-        _txt += get_class( name, values, _fname, rename = rename)   
 
+    _segment = ""
+    _segmentPre = ""
     # Structs
     _structs = [(i[1], i[3], i[4]) for i in data if i[0] == filename and i[2] == "struct"] 
     for _filename, name, values in _structs:
+        if ignore and ( name in ignore): continue
         _fname = os.path.relpath( _filename, root )
-        _txt += get_struct( name, values, _fname, rename = rename) 
+        if name in inheritable:
+            _segmentPre += get_struct( name, values, _fname, rename = rename, inheritable = True )
+        else:
+            _segment += get_struct( name, values, _fname, rename = rename) 
 
+    _txt += _segmentPre
+    _txt += _segment
+
+    _segment = ""
+    _segmentPre = ""
+    # Classes
+    _classes = [(i[1], i[3],i[4]) for i in data if i[0] == filename and i[2] == "class"]     
+    for _filename, name, values in _classes:
+        if ignore and ( name in ignore): continue
+        _fname = os.path.relpath( _filename, root )
+        if name in inheritable:
+            _segmentPre += get_class( name, values, _fname, rename = rename, inheritable = True )
+        else:
+            _segment += get_class( name, values, _fname, rename = rename)   
+
+    _txt += _segmentPre
+    _txt += _segment
     # Typedefs
     _typedefs = [(i[1], i[3],i[4]) for i in data if i[0] == filename and i[2] == "typedef"] 
     for _filename, name, values in _typedefs:
+        if ignore and ( name in ignore): continue
         _fname = os.path.relpath( _filename, root )
         _txt += get_typedef(name, values, _fname, rename = rename)
     
@@ -596,16 +741,20 @@ def export_txt(filename, data,  root= "/", rename = {}):
         _txt += f'{{.push header: "{_fname}".}}\n\n'
 
     _constructors = [i for i in data if i[0] == filename and i[2] == "constructor"]
+    _dup = {}
     for i in _constructors:
-        _txt += get_constructor(i[4], rename)        
+        _txt += get_constructor(i[4], rename, _dup)
 
     _methods = [i for i in data if i[0] == filename and i[2] == "method"]
     #if "AlphaFunc" in filename:
     #    print("dntro")
     #    pprint(_methods)
     #    pprint( [i for i in data if i[0] == filename ]  )
+    _visited = set()
     for i in _methods:
-        _txt += get_method(i[4], rename)
+        _m = get_method(i[4], rename, _visited )
+        if _m:
+            _txt += _m
 
     if len(_n) > 0:
         _fname = os.path.relpath( _n[0][1], root )        

@@ -94,7 +94,7 @@ import re
 from pprint import pprint
 from pathlib import Path
 import collections
-from export import *
+from .export import *
 
 
 
@@ -134,57 +134,77 @@ def _relationships( data, provides, missing ):
         _new[file] = _data
     return _new
 
-def find_dependencies(obj, data):
+def find_dependencies(obj, data, refobj = None, rec = None ):    
+    if rec == None:
+        rec = set()
+
+    if obj in rec: return set()
+    rec.add( obj )
     _newImports = set([])
     _deps = set([])
+    _idxClass = [j for j in range(len(data)) if data[j][2] in [ "class", "typedef", "struct"]]
+    _classesFully = [data[j][4]["fully_qualified"] for j in _idxClass]
+    _classes = [data[j][3] for j in _idxClass]
+
+    _idxEnum = [j for j in range(len(data)) if data[j][2] in ["enum"]]
+    _enumsFully = [data[j][3] for j in _idxEnum]
+    _enums = ["enum "+data[j][4]["name"] for j in _idxEnum]
+
+
     for i in range(len(data)):
-        if data[i][2] in ["typedef", "class"]:
+        if data[i][2] in ["typedef", "class", "struct"]:
             _values = data[i][4]
 
-            if "RefMatrix" in obj and data[i][2] == "typedef":
-                #if "osg::RefMatrix" in _values["fully_qualified"]:
-                    print(obj)
-                    pprint(_values)            
+            # if "RefMatrix" in obj and data[i][2] == "typedef":
+            #     #if "osg::RefMatrix" in _values["fully_qualified"]:
+            #         print(obj)
+            #         pprint(_values)            
             if _values["fully_qualified"] == obj:
 
                 # If the type depend on other types, they need to be moved too.
                 # - For instance a typedef might have an underlying dep
                 if "underlying_deps" in _values:
                     # Search for classes with the same fully qualified identifier
-                    _idx = [j for j in range(len(data)) if data[j][2] == "class"]
-                    _classesFully = [data[j][4]["fully_qualified"] for j in _idx]
-                    _classes = [data[j][3] for j in _idx]     
                     
+                    # print( refobj, ">>", obj, data[i][2], ">>",  _values["underlying_deps"] )
                     #if len(_values["underlying_deps"]) == 0:
-
 
                     for _i in _values["underlying_deps"]:
                         # If found, move it
-                     
-                        if _i in _classesFully:
+                        found = False
+                        if _i in _enumsFully:
+                            _deps.add(_i)
+                            found = True
+
+                        elif _i in _enums:
+                            _k = _enums.index(_i)
+                            _k = _idxEnum[_k]
+                            _fullname = data[_k][3]
+                            _deps.add(_fullname)
+                            found = True
+
+                        elif _i in _classesFully:
                             if not _i in _deps:
-                                _newdeps = find_dependencies(_i, data)                                
+                                _newdeps = find_dependencies(_i, data, obj, rec)                                
                                 _deps.add(_i)
                                 _deps = _deps.union(_newdeps)
-
-                                #find_dependencies
-                            #_k = _classesFully.index(_i)
-                            #_k = _idx[_k]
-                            #_newImports.add(data[i][0])
-
-                            #data[_k] = tuple( [newfilename] + list(data[_k][1:]) )
+                                found = True
 
                         elif _i in _classes:                          
                             _k = _classes.index(_i)
-                            _k = _idx[_k]
+                            _k = _idxClass[_k]
                             #print(_i)
                             #print(data[_k][4]["fully_qualified"])
                             _fullname = data[_k][4]["fully_qualified"]                          
-                            _newdeps = find_dependencies(_fullname, data)                                
-                            _deps.add(_fullname)
-                            _deps = _deps.union(_newdeps)                                                     
-                        #    _newImports.add(data[i][0])
-                        #    data[_k] = tuple( [newfilename] + list(data[_k][1:]) ) 
+                            if not _fullname in _deps:
+                                _newdeps = find_dependencies(_fullname, data, obj, rec)
+                                _deps.add(_fullname)
+                                _deps = _deps.union(_newdeps)
+                            found = True
+
+                        # if found:
+                        #     print( "found:", _i )
+
 
                 # - Also when a template is used, we check its params
               
@@ -192,15 +212,15 @@ def find_dependencies(obj, data):
                     if len(_values["template_params"]) > 0:
                         # Search for enums that might be used in the params
                         _idx = [j for j in range(len(data)) if data[j][2] in ["enum"]]
-                        _fullyEnum = [data[j][3] for j in _idx]
+                        _enumsFully = [data[j][3] for j in _idx]
                        
                         for template_param in _values["template_params"]:
                             if type(template_param) == tuple:
-                                for k in range(len(_fullyEnum)):
-                                    _enumType = _fullyEnum[k]
+                                for k in range(len(_enumsFully)):
+                                    _enumType = _enumsFully[k]
                                     if _enumType.endswith( template_param[1] ) and "::" in template_param[1]:
                                         if not _enumType in _deps:
-                                            _newdeps = find_dependencies(_enumType, data)                                               
+                                            _newdeps = find_dependencies(_enumType, data, obj, rec)                                               
                                             _deps.add(_enumType)                                        
                                             _deps = _deps.union(_newdeps)                                              
                                         #_deps.add(_enumType)
@@ -209,7 +229,7 @@ def find_dependencies(obj, data):
                                         #data[_k] = tuple( [newfilename] + list(data[_k][1:]) )     
     return _deps
 
-def move_to_shared_types( newfilename, data,  _root, relations = {} ):
+def move_to_shared_types( newfilename, data,  _root, relations = {}, force_shared = [] ):
     # Dictionary with the files that are providing objects to other files
     """
     _providers = {}
@@ -222,7 +242,7 @@ def move_to_shared_types( newfilename, data,  _root, relations = {} ):
     """
     # Objects that need to be moved
     _objects = set([])
-    for _, _dict in _relations.items():
+    for _, _dict in relations.items():
         for _, sets in _dict.items():
             # Acumulate all the sets associate to a specific file.
             _objects = _objects.union(sets)  
@@ -233,10 +253,18 @@ def move_to_shared_types( newfilename, data,  _root, relations = {} ):
     #    if "Template" in i:
     #        print(i)
     #pprint(_all)
+    # _depIdx = [j for j in range(len(data)) if data[j][2] in [ "class", "typedef", "struct"]]
+    # _classes = [data[j][3] for j in _depIdx]
+    # _classes = [data[j][4]["fully_qualified"] for j in _depIdx]
+    # pprint( _classes )
+
     for obj in _objects:
-        _tmp = find_dependencies(obj, data)
+        _tmp = find_dependencies(obj, data, newfilename)
         _all = _all.union(_tmp)
 
+
+    _all.update( force_shared )
+        
     # Move items to the new file
     _newImports = set([])
     for obj in _all:
@@ -273,45 +301,6 @@ def move_to_shared_types( newfilename, data,  _root, relations = {} ):
                 if _values["fully_qualified"] == obj:      
                     _newImports.add(data[i][0])                    
                     data[i] = tuple( [newfilename] + list(data[i][1:]) )
-                    """
-                    # If the type depend on other types, they need to be moved too.
-                    # - For instance a typedef might have an underlying dep
-                    if "underlying_deps" in _values:
-                        # Search for classes with the same fully qualified identifier
-                        _idx = [j for j in range(len(data)) if data[j][2] == "class"]
-                        _classesFully = [data[j][4]["fully_qualified"] for j in _idx]
-                        _classes = [data[j][3] for j in _idx]     
-                                          
-                        for _i in _values["underlying_deps"]:
-                            # If found, move it
-                            if _i in _classesFully:
-                                _k = _classesFully.index(_i)
-                                _k = _idx[_k]
-                                _newImports.add(data[i][0])
-                                data[_k] = tuple( [newfilename] + list(data[_k][1:]) )
-
-                            elif _i in _classes:
-                                _k = _classes.index(_i)
-                                _k = _idx[_k]
-                                _newImports.add(data[i][0])
-                                data[_k] = tuple( [newfilename] + list(data[_k][1:]) ) 
-
-                    # - Also when a template is used, we check its params
-                    if "template_params" in _values:
-                        if len(_values["template_params"]) > 0:
-                            # Search for enums that might be used in the params
-                            _idx = [j for j in range(len(data)) if data[j][2] in ["enum"]]
-                            _fullyEnum = [data[j][3] for j in _idx]
-                            
-                            for template_param in _values["template_params"]:
-                                if type(template_param) == tuple:
-                                    for k in range(len(_fullyEnum)):
-                                        _enumType = _fullyEnum[k]
-                                        if _enumType.endswith( template_param[1] ) and "::" in template_param[1]:
-                                            _k = _idx[k]
-                                            _newImports.add(data[i][0])
-                                            data[_k] = tuple( [newfilename] + list(data[_k][1:]) ) 
-                    """               
                         
 
     # Add the new imports
@@ -323,9 +312,8 @@ def move_to_shared_types( newfilename, data,  _root, relations = {} ):
 
 
 
-"""
 def _get_objects_provided_per_file( data, _relations ):
-    ""This creates a dictionary with all the objects provided by each file and
+    """This creates a dictionary with all the objects provided by each file and
     that are needed by some other file.
 
     Creates a dictionary with the identifiers provided by each file.
@@ -337,7 +325,7 @@ def _get_objects_provided_per_file( data, _relations ):
     '/usr/include/osg/ValueStack':  {'osg::ValueStack'},
     '/usr/include/osg/Vec2':        {'osg::Vec2'},
 
-    ""
+    """
     _filter = {}
     #_pf = [i for i in data if len(i) == 4]  # Filter data
     for _, _dict in _relations.items():
@@ -380,14 +368,13 @@ def _get_objects_provided_per_file( data, _relations ):
 
             _filter[k] = _set
     return _filter   
-"""
-"""
+
 def _get_repeated_identifiers(_filter):
-    ""They will need to go in different files.
+    """They will need to go in different files.
     {'Type': [('/usr/include/osg/StateAttribute', 'osg::StateAttribute::Type'),
               ('/usr/include/osg/Uniform', 'osg::Uniform::Type'),
               ('/usr/include/osg/PrimitiveSet', 'osg::PrimitiveSet::Type')]}
-    ""    
+    """    
     _identifiers = [_item.split("::")[-1] for _file, _set in _filter.items() for _item in _set]
     _repeatedNames = set([x for x in _identifiers if _identifiers.count(x) > 1])
     _repeated = {}
@@ -401,7 +388,6 @@ def _get_repeated_identifiers(_filter):
     return _repeated
 
 # TODO: en lo siguiente, renombrar Type a PrimitiveSet.Type, por ejemplo
-"""
 
 def _get_renames_identifiers(newfilename, data):
     """They will need to go in different files.
@@ -494,17 +480,17 @@ def send_to_shared_types_old( data, _filter, _root, _repeated, newfilename ):
                         if len(_values["template_params"]) > 0:
                             #pprint(_values["template_params"])
                             _idx = [j for j in range(len(data)) if data[j][2] in ["enum"]]
-                            _fullyEnum = [data[j][3] for j in _idx]
-                            #pprint(_fullyEnum)
+                            _enumsFully = [data[j][3] for j in _idx]
+                            #pprint(_enumsFully)
                             
                             #_templateTypes = set([])
                             for template_param in _values["template_params"]:
                                 if type(template_param) == tuple:
                                     #print(i[1])
-                                    for k in range(len(_fullyEnum)):
-                                        _enumType = _fullyEnum[k]
+                                    for k in range(len(_enumsFully)):
+                                        _enumType = _enumsFully[k]
                                         if _enumType.endswith( template_param[1] ) and "::" in template_param[1]:
-                                            #_k = _fullyEnum.index(k)
+                                            #_k = _enumsFully.index(k)
                                             _k = _idx[k]
                                             _newImports.add(data[i][0])
                                             data[_k] = tuple( [newfilename] + list(data[_k][1:]) ) 
@@ -529,7 +515,9 @@ def get_root(data):
 
 def get_new_name(_full, names):
     _tmp = _full.split("::")
+    
     # Option 1: upper case letters
+    print( _tmp )
     res = [char.lower() for char in _tmp[-2] if char.isupper()] 
     res = f"{''.join(res)}{_tmp[-1]}"
     if res not in names:
@@ -550,17 +538,15 @@ def get_new_name(_full, names):
                     return _val
 
 
-#==============================================================
-if __name__ == '__main__':
+
+def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={} ):
     import pickle
     # Read the command line: it takes a glob and a destination
-    _dest = sys.argv[1]
-    _path = os.getcwd()
-    _destination_folder = os.path.join(_path, _dest)
-    _delete_folder = os.path.join(_dest, "deleteme")    
-
-
-    _files_name = os.path.join(_delete_folder, 'files.pickle')
+    _dest = dest
+    # _path = os.getcwd()
+    # _destination_folder = os.path.join(_path, _dest)
+    _files_folder = os.path.join(parsed, "__parsed")
+    _files_name = os.path.join(_files_folder, 'files.pickle')
     fp = open(_files_name, 'rb')
     _tmp = pickle.load(fp)
     data      = _tmp["includes"]
@@ -570,40 +556,79 @@ if __name__ == '__main__':
     fp.close()
 
     _relations = _relationships( data , provides, missing)
-    #_filter    = _get_objects_provided_per_file( data, _relations )
-    #pprint(_filter)
-    #_repeated  = _get_repeated_identifiers( _filter )
-    #pprint(_repeated)
+    _filter    = _get_objects_provided_per_file( data, _relations )
+    # pprint(_filter)
+    _repeated  = _get_repeated_identifiers( _filter )
+    # pprint(_repeated)
 
+    rootTypesFileName = f"{_dest}_types.nim"
 
-
+    _output = output
+    os.makedirs( _output, exist_ok = True )
     #
     #pprint(_filter["/usr/include/osg/Array"])
     #pprint(dependsOn["/usr/include/osg/Array"])
 
     # Add a column to indicate where the values will be stored
-    _root = get_root(data)
+    if root == None:
+        _root = get_root(data)
+    else:
+        _root = root
+
     _new = []
     for i in data:
         _tmp = os.path.splitext(i[0])[0]
-        _destFilename = os.path.relpath(_tmp, _root)
+        _destFilename = os.path.basename(_tmp)
+        # _destFilename = os.path.relpath(_tmp, _root)
         _destFilename += ".nim"
         _tmp = tuple( [_destFilename] + list(i))
         _new.append( _tmp )
     data = _new
 
     # Aquello que es compartido por varios ficheros se lleva al raiz
-    _newfilename = os.path.join( f"{_dest}_types.nim" )
+    _newfilename = os.path.join( rootTypesFileName )
 
     # Move those definitions which are shared (in filter) to "osg_types.nim"
-    data = move_to_shared_types( _newfilename, data,  _root, relations = _relations)
+    # _force_shared = [
+    #     "Diligent::ISampler",
+    #     "Diligent::IFramebuffer",
+    #     "Diligent::IBottomLevelAS",
+    #     "Diligent::IShaderBindingTable",
+    #     "Diligent::BufferFormat",
+    #     "Diligent::RenderTargetBlendDesc",
+    #     "Diligent::RenderTargetBlendDesc",
+    #     "Diligent::BLEND_FACTOR",
+    #     "Diligent::BLEND_OPERATION",
+    #     "Diligent::LOGIC_OPERATION",
+    #     "Diligent::HIT_GROUP_BINDING_MODE",
+    #     "Diligent::STATE_TRANSITION_TYPE",
+    #     "Diligent::SHADER_RESOURCE_VARIABLE_TYPE",
+    #     "Diligent::IShaderSourceInputStreamFactory",
+    #     "Diligent::IMemoryAllocator",
+    #     "Diligent::DebugMessageCallbackType",
+    #     "Diligent::IFileStream",
+    # ]
+
+    #FORCE move all types into shared file
+    _idxTypes = [j for j in range(len(data)) if data[j][2] in [ "class", "typedef", "struct"]]
+    _classesFully = [data[j][4]["fully_qualified"] for j in _idxTypes]
+    
+    _idxEnum = [j for j in range(len(data)) if data[j][2] in ["enum"]]
+    _enumsFully = [data[j][3] for j in _idxEnum]
+    _allTypes = _classesFully + _enumsFully
+
+    data = move_to_shared_types( _newfilename, data,  _root, relations = _relations, force_shared = _allTypes )
     #data = send_to_shared_types( data,  _filter, _root, _repeated, _newfilename ) 
+
+    # _idx = [j for j in range(len(data)) if data[j][2] in ["enum"]]
+    # pprint([data[j][3] for j in _idx])
+    # pprint([data[j][4]['name'] for j in _idx])
 
     # Check the data that it is now in {dest}_types (the shared file) 
     _tmpNames = set([])
     _tmpFully = set([])
     for i in data:
-        if i[0].endswith( f"{_dest}_types.nim" ):
+        if i[0].endswith( rootTypesFileName ):
             _name = i[3]
             _fully = None
             if len(i)  > 4:
@@ -615,7 +640,7 @@ if __name__ == '__main__':
     _tmp = []
     _done = []
     for i in range(len(data)):
-        if not data[i][0].endswith( f"{_dest}_types.nim" ) and data[i][0] not in _done:
+        if not data[i][0].endswith( rootTypesFileName ) and data[i][0] not in _done:
             _done.append( data[i][0] )
             _tmp.append( (data[i][0], None, "import",[f"{_dest}_types"]) )
     data = _tmp + data
@@ -646,7 +671,7 @@ if __name__ == '__main__':
     _tmp = []
     for _file,_set  in _dict.items():
         for i in _set:
-        #if not data[i][0].endswith( f"{_dest}_types.nim" ) and data[i][0] not in _done:
+        #if not data[i][0].endswith( rootTypesFileName ) and data[i][0] not in _done:
             #_done.append( data[i][0] )
             _tmp.append( (_file, None, "import",[i]) )
     data = _tmp + data    
@@ -668,7 +693,8 @@ if __name__ == '__main__':
     # ROOT FILE
     _destFiles = set( [i[0] for i in data] ) 
 
-    _pragma = '{.passL: "-losg -losgSim -losgAnimation -losgTerrain -losgDB -losgText -losgFX -losgUI -losgGA -losgUtil -losgManipulator -losgViewer -losgParticle -losgVolume -losgPresentation -losgWidget -losgShadow", passC:"-I/usr/include/osg" .}\n\n'
+    _pragma = ''
+    # _pragma = '{.passL: "-losg -losgSim -losgAnimation -losgTerrain -losgDB -losgText -losgFX -losgUI -losgGA -losgUtil -losgManipulator -losgViewer -losgParticle -losgVolume -losgPresentation -losgWidget -losgShadow", passC:"-I/usr/include/osg" .}\n\n'
     data = [(f"{_dest}.nim", None, "pragma", None, _pragma )] + data
     
     for _file in _destFiles:
@@ -688,13 +714,14 @@ if __name__ == '__main__':
     #=========================
     _destFiles = set( [i[0] for i in data] )
     for destFile in _destFiles:
-        _txt = export_txt( destFile, data, root = _root, rename=rename)        
-            
-        _fname = os.path.join(_destination_folder , destFile)        
+        print( destFile)
+
+    for destFile in _destFiles:
+        _txt = export_txt( destFile, data, root = _root, rename=rename, ignore = ignore, inheritable=inheritable)
+        _fname = os.path.join(_output , destFile)        
         _fp = open(_fname, "w")
         _fp.write( _txt )
         _fp.close()
-        #print("[INFO] Written: ", _fname)
 
     #-------------------------
     """
@@ -711,3 +738,11 @@ if __name__ == '__main__':
                         if _object in _set:
                             _dependants[_object].add( _f )
     """
+
+
+#==============================================================
+if __name__ == '__main__':
+    export_nim( sys.argv[1] )
+
+
+
