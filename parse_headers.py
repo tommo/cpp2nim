@@ -289,7 +289,15 @@ def parse_include_file(filename, dependsOn, provides, search_paths = []):
     _index = clang.cindex.Index.create()
 
     searchFlags = [ f"-I{pathitem}" for pathitem in search_paths ]
-    _args = ['-x', 'c++',  '-std=c++17', ]  + searchFlags
+    _args = []
+    _args += ['-XClang' ]  
+    _args += ['-x', 'c++' ]
+    _args += ['-std=c++17']
+    _args += ['-include', 'hack.h']
+    
+    _args += searchFlags
+
+    print( _args )
     #opts = TranslationUnit.PARSE_INCOMPLETE | TranslationUnit.PARSE_SKIP_FUNCTION_BODIES # a bitwise or of TranslationUnit.PARSE_XXX flags.
     _opts = clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD | \
             clang.cindex.TranslationUnit.PARSE_PRECOMPILED_PREAMBLE | \
@@ -397,8 +405,8 @@ def _parse_enums(filename, _tu):
 def _parse_typedef(filename, _tu):
     _typedefs = {}
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
-        if node.kind in [clang.cindex.CursorKind.TYPE_REF] and \
-            node.location.file.name == filename:
+        if not ( node.location.file and node.location.file.name == filename ): continue
+        if node.kind in [clang.cindex.CursorKind.TYPE_REF]:
             refKind = node.referenced.kind
             _name = node.referenced.spelling
             if refKind in [ clang.cindex.CursorKind.ENUM_DECL, clang.cindex.CursorKind.TYPEDEF_DECL ]: continue
@@ -411,9 +419,9 @@ def _parse_typedef(filename, _tu):
                     }
             # _typedefs.update({_name : _tmp})
 
-        if node.kind in [clang.cindex.CursorKind.TYPEDEF_DECL] and \
-            node.location.file.name == filename:  
+        elif node.kind in [clang.cindex.CursorKind.TYPEDEF_DECL]:
             _name = node.displayname
+
             _tmp = { 
                         "underlying": node.underlying_typedef_type.spelling,
                         "typedef_type": False,
@@ -430,14 +438,19 @@ def _parse_typedef(filename, _tu):
             _tmp["params"] = get_params_from_node(node)
             
             _kind = node.underlying_typedef_type.kind
+
             if _kind == clang.cindex.TypeKind.POINTER:
                 _pointee = node.underlying_typedef_type.get_pointee()
-
                 if _pointee.kind == clang.cindex.TypeKind.FUNCTIONPROTO:
                     _result = _pointee.get_result().spelling
                     _tmp["result"] = _result
                     _tmp["typedef_type"] = "function"  
 
+            elif _kind == clang.cindex.TypeKind.FUNCTIONPROTO:
+                    _result = node.underlying_typedef_type.get_result().spelling
+                    _tmp["result"] = _result
+                    _tmp["typedef_type"] = "function"  
+                    print("_name", _tmp )
             _typedefs.update({_name : _tmp})
     return _typedefs
 
@@ -497,9 +510,9 @@ def _parse_struct(filename, _tu):
             fields = []
             deps = []
             
-            # print( ">>>>>>parse_struct", node.spelling, node.is_definition() )
+            print( ">>>>>>parse_struct", node.spelling, node.is_definition() )
             for fnode in node.type.get_fields():
-                # print( " ", fnode.spelling, fnode )
+                print( " ", fnode.spelling, fnode.type.spelling )
                 fields.append( { 
                     "name" : fnode.spelling,
                     "type" : fnode.type.spelling, #TODO:template/array?
@@ -533,7 +546,7 @@ def _parse_constructors(filename, _tu):
                 "class_name": node.semantic_parent.spelling,
                 "comment": node.brief_comment,
                 "fully_qualified": fully_qualified_constructor(node.referenced) }
-            print( ">>>>>>>>>>>>", node.spelling, fully_qualified_constructor(node.referenced) )
+            # print( ">>>>>>>>>>>>", node.spelling, fully_qualified_constructor(node.referenced) )
             _tmp["params"] = get_params_from_node(node)
             _constructors.append(_tmp)
     return _constructors
@@ -692,7 +705,7 @@ def do_parse( _root, _folders, _dest, search_paths = [] ):
     for include_file in _files:
         print(f"Parsing ({_n}/{_nTotal}): {include_file}")
         _n += 1
-        _data, _deps, _prov, _miss = parse_include_file(include_file, _dependsOn, _provides )
+        _data, _deps, _prov, _miss = parse_include_file(include_file, _dependsOn, _provides, search_paths = search_paths )
         #pprint(pf)
         #files[include_file] = pf
         files = files + _data

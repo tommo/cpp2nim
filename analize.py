@@ -686,7 +686,7 @@ def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={} ):
 
     #for k, values in dependsOn.items():
     #    print(values)
-    print("\n\n\n")
+    # print("\n\n\n")
     #pprint(dependsOn["/usr/include/osg/AnimationPath"])
 
 

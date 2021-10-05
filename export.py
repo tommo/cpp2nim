@@ -88,6 +88,10 @@ def get_nim_type( c_type, rename = {} ):
 
     if c_type.endswith("const *"):
         c_type = c_type[:-7]+"*"
+        
+    if c_type.startswith("class "):
+        c_type = c_type[5:].strip()
+
     if c_type.startswith("const "):
         c_type = c_type[5:].strip()
         isVar = False
@@ -358,7 +362,7 @@ def get_method(data,rename = {}, visited=None):
             
     _methodName = clean(_methodName)
     if _isOperator and _methodName in ["`=`"]:
-        _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.importcpp: "{_importName}".}}\n'
+        _tmp = f'proc assign*{_templParams}({_params})  {{.importcpp: "{_importName}".}}\n'
 
     elif _isOperator and _methodName in ["`[]`"]:
         _importName = "#[#]"
