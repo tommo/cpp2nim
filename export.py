@@ -69,6 +69,7 @@ import textwrap
 import re
 from pprint import pprint
 
+kernelA = re.compile("([^<]+)[<]*([^>]*)[>]*")
 def get_nim_arraytype( c_type, rename = {} ):
     mo = re.match( '(.*)\[\s*(\d*)\s*\]', c_type )
     if not mo: return c_type
@@ -78,6 +79,26 @@ def get_nim_arraytype( c_type, rename = {} ):
         return f'ptr {get_nim_type( etype, rename )}'
     else:
         return f'array[{count},{get_nim_type( etype, rename )}]'
+
+def get_nim_proctype( c_type, rename = {} ):
+    #TODO: proper proc type
+    mo = re.match( '(.*) \(\*\)\((.*)\)', c_type )
+    rtype = mo.group(1)
+    inner = mo.group(2)
+    
+    out = "proc("
+    count = 0
+    for x in inner.split(","):
+        if count > 0:
+            out = out + ','
+        out = out + f'arg_{count}:{get_nim_type(x)}'
+        count += 1
+    
+    if rtype != "void":
+        out = out + f'):{get_nim_type( rtype )}' + '{.cdecl}'
+    else:
+        out = out + ')' + '{.cdecl}'
+    return out
 
 def get_nim_type( c_type, rename = {} ):   
     c_type = c_type.strip()
@@ -91,6 +112,8 @@ def get_nim_type( c_type, rename = {} ):
         
     if c_type.startswith("class "):
         c_type = c_type[5:].strip()
+
+    # if c_type == "const char *":
 
     if c_type.startswith("const "):
         c_type = c_type[5:].strip()
@@ -126,7 +149,11 @@ def get_nim_type( c_type, rename = {} ):
     if c_type in ["double"]:
         return "cdouble"
     if c_type in ["char *"]:
-        return "cstring"
+        if isVar:
+            return "cstring"
+        else:
+            return "ccstring"
+
     if c_type in ["char"]:
         return "cchar"
     if c_type in ["signed char"]:
@@ -146,10 +173,13 @@ def get_nim_type( c_type, rename = {} ):
         c_type = f"var {c_type}"
     c_type = c_type.replace("enum ", "")
     c_type = c_type.replace("struct ", "")
+
+
+    if "(*)" in c_type:
+        return get_nim_proctype( c_type, rename )
     # xxxx::yyyy<zzzzz> TODO: MODIFY <map>, [K]
     if "::" in c_type:
-        kernel = re.compile("([^<]+)[<]*([^>]*)[>]*")
-        _a, _b = kernel.findall(c_type)[0]
+        _a, _b = kernelA.findall(c_type)[0]
         _tmp = _a.split("::")[-1]        
         #for _repeatedTypes, _list in repeated.items():
         #    if _tmp == _repeatedTypes:
@@ -276,7 +306,7 @@ def export_params_for_constructor(params, rename = {}):
         else:
             _part += f'a{n:02d}: '
         _type = get_nim_type(p[1], rename)
-        print( p )
+        # print( p )
         if len(p) > 2:
             if p[2] != None:
                 _hasDefault = True
@@ -296,7 +326,7 @@ def get_constructor(data,rename = {}, _dup={}):
     else:
         #workaround for constant expr default parameters\
         _paramsTest = export_params(data["params"], rename)   
-        print("constructor", data["class_name"], _paramsTest )
+        # print("constructor", data["class_name"], _paramsTest )
 
         n = len( _paramParts )
         k = 0
@@ -310,7 +340,7 @@ def get_constructor(data,rename = {}, _dup={}):
                 _tmp += _proc
                 added = True
             if not _paramParts[r][1]: 
-                print("END at", _paramParts[r])
+                # print("END at", _paramParts[r])
                 break
         if added:
             _tmp += get_comment(data)  + "\n"

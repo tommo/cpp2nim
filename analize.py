@@ -97,6 +97,7 @@ import collections
 from .export import *
 
 
+# clang.cindex.Config.set_library_path( '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libclang.dylib' )
 
 def _relationships( data, provides, missing ):
     """For each file it gives the files providing some dependencies
@@ -517,7 +518,7 @@ def get_new_name(_full, names):
     _tmp = _full.split("::")
     
     # Option 1: upper case letters
-    print( _tmp )
+    # print( _tmp )
     res = [char.lower() for char in _tmp[-2] if char.isupper()] 
     res = f"{''.join(res)}{_tmp[-1]}"
     if res not in names:
@@ -558,6 +559,7 @@ def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={} ):
     _relations = _relationships( data , provides, missing)
     _filter    = _get_objects_provided_per_file( data, _relations )
     # pprint(_filter)
+
     _repeated  = _get_repeated_identifiers( _filter )
     # pprint(_repeated)
 
@@ -713,8 +715,8 @@ def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={} ):
     # EXPORTING TO FILES
     #=========================
     _destFiles = set( [i[0] for i in data] )
-    for destFile in _destFiles:
-        print( destFile)
+    # for destFile in _destFiles:
+    #     print( destFile)
 
     for destFile in _destFiles:
         _txt = export_txt( destFile, data, root = _root, rename=rename, ignore = ignore, inheritable=inheritable)
