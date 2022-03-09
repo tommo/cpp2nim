@@ -69,6 +69,8 @@ import textwrap
 import re
 from pprint import pprint
 
+noConstPtr = False
+
 kernelA = re.compile("([^<]+)[<]*([^>]*)[>]*")
 def get_nim_arraytype( c_type, rename = {} ):
     mo = re.match( '(.*)\[\s*(\d*)\s*\]', c_type )
@@ -82,7 +84,7 @@ def get_nim_arraytype( c_type, rename = {} ):
 
 def get_nim_proctype( c_type, rename = {} ):
     #TODO: proper proc type
-    mo = re.match( '(.*) \(\*\)\((.*)\)', c_type )
+    mo = re.match( '(.*)\s*\(\*\)\((.*)\)', c_type )
     rtype = mo.group(1)
     inner = mo.group(2)
     
@@ -100,23 +102,24 @@ def get_nim_proctype( c_type, rename = {} ):
         out = out + ')' + '{.cdecl}'
     return out
 
-def get_nim_type( c_type, rename = {} ):   
+def get_nim_type( c_type, rename = {}, returnType = False ):   
     c_type = c_type.strip()
     if c_type.endswith( "]" ):
         return get_nim_arraytype( c_type, rename )
 
     isVar = True
+    isConst = False
 
     if c_type.endswith("const *"):
+        isConst = True
         c_type = c_type[:-7]+"*"
         
     if c_type.startswith("class "):
         c_type = c_type[5:].strip()
 
-    # if c_type == "const char *":
-
     if c_type.startswith("const "):
         c_type = c_type[5:].strip()
+        isConst = True
         isVar = False
 
     if not c_type.endswith("&"):
@@ -171,9 +174,9 @@ def get_nim_type( c_type, rename = {} ):
 
     if isVar:
         c_type = f"var {c_type}"
+
     c_type = c_type.replace("enum ", "")
     c_type = c_type.replace("struct ", "")
-
 
     if "(*)" in c_type:
         return get_nim_proctype( c_type, rename )
@@ -185,9 +188,7 @@ def get_nim_type( c_type, rename = {} ):
         #    if _tmp == _repeatedTypes:
         #        _tmp = ".".join( _a.split("::")[-2:] )
         #if c_type == "Array::Type":
-        #    print(_a)
         for somename in rename.keys():
-            #print(somename)
             if somename.endswith( _a ):
                 _tmp = rename[somename]
         #if _a in rename:
@@ -214,7 +215,15 @@ def get_nim_type( c_type, rename = {} ):
             _b = ",".join(_b)
             _b = f"[{_b}]"
         c_type = f"{_tmp}{_b}"
-        return get_nim_type( c_type, rename )
+        c_type =  get_nim_type( c_type, rename, True )
+        if returnType and isConst:
+            if c_type.startswith("ptr "):
+                return f"ConstPtr[{c_type[4:]}]"
+            else:
+                return c_type
+                # return f"ConstPtr[{c_type}]"
+        else:
+            return c_type
 
     if "<" in c_type and ">" in c_type:
         c_type = c_type.replace("<", "[")
@@ -230,7 +239,11 @@ def get_nim_type( c_type, rename = {} ):
     if c_type.startswith( "ptr Char" ):
         c_type = "cstring"
     # print( ">>>>>>", c_type, len(c_type), c_type == 'ptr float' )
-    return c_type
+
+    if returnType and isConst:
+        return f"CPPConst[{c_type}]"
+    else:
+        return c_type
 
 
 NIM_KEYWORDS = ["addr", "and", "as", "asm", "bind", "block", "break",
@@ -250,7 +263,8 @@ def clean(txt):
     if txt[-2:] == " &":
         txt = txt[:-2]
     if txt[0] == "_":
-        txt = "prefix_" + txt[1:]
+        # txt = txt[1:]
+        txt = "v_" + txt[1:]
     if txt in NIM_KEYWORDS:
         txt = f"`{txt}`"
     return txt
@@ -266,10 +280,14 @@ def export_params(params, rename = {}):
             _params += clean(p[0]) + ": "
         else:
             _params += f'a{n:02d}: '
+
         _type = get_nim_type(p[1], rename)
         if len(p) > 2:
             if p[2] != None:
-                _type += f" = {p[2]}"
+                p2 = p[2]
+                if _type.endswith("Enum"):
+                    p2 = _type + "." + p[2]
+                _type += f" = {p2}"
 
         _params += _type
         n += 1
@@ -347,35 +365,42 @@ def get_constructor(data,rename = {}, _dup={}):
 
     return _tmp    
 
-def get_method(data,rename = {}, visited=None):
+def get_method(data, rename = {}, visited=None, varargs={} ):
     # Parameters
+    # print(data["params"])
     _params = export_params(data["params"], rename)
-    if _params != "":
-        _params = ", " + _params
-
     # - Bear in mind the 'in-place' case
     _classname = "ptr " + data["class_name"]
     # if not data["const_method"]:
     #     _classname = f"var {_classname}"
+    if not data["plain_function"]:
+        _importMethod = "importcpp"
+        _importName = data["name"]
+        if _params != "":
+            _params = f'self: {_classname},{_params}'
+        else:
+            _params = f'self: {_classname}'
+    else:
+        _importName = data["fully_qualified"]    
+        _importMethod = "importc"
 
-    _params = f'self: {_classname}{_params}'
+    isVararg = _importName in varargs
 
     # Returned type
     _return = ""
     if data["result"] not in ["void", "void *"]:
         _result = data["result"].strip()
-        if _result.startswith("const "):
-            _result = _result[6:]
+        # if _result.startswith("const "):
+        #     _result = _result[6:]
         if _result[-1] == "&":
             _result = _result[:-1].strip()
-        _result = get_nim_type( _result, rename )
+        _result = get_nim_type( _result, rename, True )
         _return = f': {_result}'
 
-    # Method name (lowercase the irst letter)
+    # Method name (lowercase the first letter)
     _methodName = data["name"]
     _methodName = _methodName[0].lower() + _methodName[1:]
-    _importName = data["name"]
-    #_importName = data["fully_qualified"]    
+    # _importName = data["name"]
 
     # Operator case
     _isOperator = False
@@ -385,21 +410,25 @@ def get_method(data,rename = {}, visited=None):
         _isOperator = True
     
     # Templates
+    _pragmas = ""
     _templParams = ""
     if "template_params" in data:
         if len(data["template_params"]) > 0:
             _templParams = "[" + ";".join( data["template_params"] ) + "]"
             
     _methodName = clean(_methodName)
+    if isVararg:
+        _pragmas += ", varargs"
+
     if _isOperator and _methodName in ["`=`"]:
-        _tmp = f'proc assign*{_templParams}({_params})  {{.importcpp: "{_importName}".}}\n'
+        _tmp = f'proc assign*{_templParams}({_params})  {{.{_importMethod}: "{_importName}"{_pragmas}.}}\n'
 
     elif _isOperator and _methodName in ["`[]`"]:
         _importName = "#[#]"
-        _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.importcpp: "{_importName}".}}\n'  
+        _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.{_importMethod}: "{_importName}"{_pragmas}.}}\n'  
 
     else:
-        _tmp = f'proc {_methodName}*{_templParams}({_params}){_return}  {{.importcpp: "{_importName}".}}\n'
+        _tmp = f'proc {_methodName}*{_templParams}({_params}){_return}  {{.{_importMethod}: "{_importName}"{_pragmas}.}}\n'
 
     if _tmp in visited: return False
     visited.add( _tmp )
@@ -423,8 +452,8 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
         _return = ""
         if data["result"] not in ["void", "void *"]:
             _result = data["result"].strip()
-            if _result.startswith("const "):
-                _result = _result[6:]
+            # if _result.startswith("const "):
+            #     _result = _result[6:]
             if _result[-1] == "&":
                 _result = _result[:-1].strip()
             _result = get_nim_type( _result, rename )
@@ -435,7 +464,7 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
         
         _tmp = f"proc ({_params}){_return} {{.cdecl.}}"
         _name = clean(name)
-        _name = _name[0].upper() + _name[1:]
+        # _name = _name[0].upper() + _name[1:]
         
         return f'  {_name}* {{.{_include}importcpp: "{data["fully_qualified"]}".}} = {_tmp}\n'
 
@@ -449,7 +478,7 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
 
     else:
         _name = clean(name)  
-        _name = _name[0].upper() + _name[1:]
+        # _name = _name[0].upper() + _name[1:]
         if _type.startswith( 'struct ' ):
             _type = _type[7:]
 
@@ -508,7 +537,7 @@ def get_struct(name, data, include = None, rename={}, inheritable = False ):
 
     _nameClean = clean(name)
     _name = data["fully_qualified"]
-    # print( data )
+    print( data )
 
     _inheritance = ""
     if len(data["base"]) > 0:
@@ -549,7 +578,6 @@ def get_struct(name, data, include = None, rename={}, inheritable = False ):
     return _tmp
 
 def get_enum(name, data, include = None, rename = {}):
-    #pprint(data)
     _name = name.split("::")[-1]    
     if name in rename:
         _name = rename[name]
@@ -566,7 +594,6 @@ def get_enum(name, data, include = None, rename = {}):
 
     _itemsTxt = ""
     _items = data["items"]
-    #pprint(_items)
     n = len(_items)
     for i in range(len(_items)):
         _i = _items[i]
@@ -673,8 +700,13 @@ def get_template_dependencies(tmp):
         result = _tmp           
     return result
 
-def export_txt(filename, data,  root= "/", rename = {}, ignore={}, inheritable={}):
+def export_txt_option(option={}):
+    global noConstPtr
+    noConstPtr = option.get( 'no_const', None )
+
+def export_txt(filename, data,  root= "/", rename = {}, ignore={}, inheritable={}, varargs={}):
     _txt = ""
+    _txt += "import wrapping_tools\n"
     _txt += "import builtin_types\n"
     #if "AlphaFunc" in filename:
     #    _t = [i for i in data if "AlphaFunc" in i[0]]
@@ -786,7 +818,7 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, inheritable={
     #    pprint( [i for i in data if i[0] == filename ]  )
     _visited = set()
     for i in _methods:
-        _m = get_method(i[4], rename, _visited )
+        _m = get_method(i[4], rename, _visited, varargs )
         if _m:
             _txt += _m
 

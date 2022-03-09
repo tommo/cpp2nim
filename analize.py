@@ -97,6 +97,8 @@ import collections
 from .export import *
 
 
+rootNameSpace = None
+
 # clang.cindex.Config.set_library_path( '/Applications/Xcode.app/Contents/Developer/Toolchains/XcodeDefault.xctoolchain/usr/lib/libclang.dylib' )
 
 def _relationships( data, provides, missing ):
@@ -516,6 +518,13 @@ def get_root(data):
 
 def get_new_name(_full, names):
     _tmp = _full.split("::")
+    if rootNameSpace and _tmp[0] == rootNameSpace:
+        return '_'.join(_tmp[1:])
+    else:
+        return _full.replace("::","_")
+
+def get_new_name_simple(_full, names):
+    _tmp = _full.split("::")
     
     # Option 1: upper case letters
     # print( _tmp )
@@ -539,8 +548,12 @@ def get_new_name(_full, names):
                     return _val
 
 
+def export_nim_option( option ):
+    global rootNameSpace
+    rootNameSpace = option.get( 'root_namespace', None )
+    export_txt_option( option )
 
-def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={} ):
+def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={}, varargs=[] ):
     import pickle
     # Read the command line: it takes a glob and a destination
     _dest = dest
@@ -589,27 +602,6 @@ def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={} ):
 
     # Aquello que es compartido por varios ficheros se lleva al raiz
     _newfilename = os.path.join( rootTypesFileName )
-
-    # Move those definitions which are shared (in filter) to "osg_types.nim"
-    # _force_shared = [
-    #     "Diligent::ISampler",
-    #     "Diligent::IFramebuffer",
-    #     "Diligent::IBottomLevelAS",
-    #     "Diligent::IShaderBindingTable",
-    #     "Diligent::BufferFormat",
-    #     "Diligent::RenderTargetBlendDesc",
-    #     "Diligent::RenderTargetBlendDesc",
-    #     "Diligent::BLEND_FACTOR",
-    #     "Diligent::BLEND_OPERATION",
-    #     "Diligent::LOGIC_OPERATION",
-    #     "Diligent::HIT_GROUP_BINDING_MODE",
-    #     "Diligent::STATE_TRANSITION_TYPE",
-    #     "Diligent::SHADER_RESOURCE_VARIABLE_TYPE",
-    #     "Diligent::IShaderSourceInputStreamFactory",
-    #     "Diligent::IMemoryAllocator",
-    #     "Diligent::DebugMessageCallbackType",
-    #     "Diligent::IFileStream",
-    # ]
 
     #FORCE move all types into shared file
     _idxTypes = [j for j in range(len(data)) if data[j][2] in [ "class", "typedef", "struct"]]
@@ -719,7 +711,7 @@ def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={} ):
     #     print( destFile)
 
     for destFile in _destFiles:
-        _txt = export_txt( destFile, data, root = _root, rename=rename, ignore = ignore, inheritable=inheritable)
+        _txt = export_txt( destFile, data, root = _root, rename=rename, ignore = ignore, inheritable=inheritable, varargs = varargs)
         _fname = os.path.join(_output , destFile)        
         _fp = open(_fname, "w")
         _fp.write( _txt )

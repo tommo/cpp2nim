@@ -139,7 +139,7 @@ NIM_KEYWORDS = ["addr", "and", "as", "asm", "bind", "block", "break",
                 "yield"]
 
 def clean(txt):
-    txt = txt.replace("const", "")
+    # txt = txt.replace("const", "")
     txt = txt.strip()
     if txt[-2:] == " &":
         txt = txt[:-2]
@@ -280,7 +280,7 @@ def get_template_dependencies(tmp):
     return [_tmp]
 
 
-def parse_include_file(filename, dependsOn, provides, search_paths = []):
+def parse_include_file(filename, dependsOn, provides, search_paths = [], extra_args =[]):
     """This will parse a include file and return the data
     """
     #_data = {"filename" : filename, "imports" : [] }
@@ -290,10 +290,12 @@ def parse_include_file(filename, dependsOn, provides, search_paths = []):
 
     searchFlags = [ f"-I{pathitem}" for pathitem in search_paths ]
     _args = []
-    _args += ['-XClang' ]  
+    _args += ['-XClang' ]
     _args += ['-x', 'c++' ]
-    _args += ['-std=c++17']
-    _args += ['-include', 'hack.h']
+    # _args += ['-std=c++17']
+
+    _args += extra_args
+    # _args += ['-include', 'hack.h']
     
     _args += searchFlags
 
@@ -497,7 +499,7 @@ def _parse_class(filename, _tu):
 def _parse_struct(filename, _tu):
     _structs = {}
     _visited = set()
-    for depth, node in get_nodes( _tu.cursor, depth=0 ):
+    for depth, node in get_nodes( _tu.cursor, depth = 0 ):
 
         if node.kind == clang.cindex.CursorKind.STRUCT_DECL and \
             node.location.file.name == filename:
@@ -555,7 +557,7 @@ def _parse_methods(filename, _tu):
     """Parse methods and operators"""
     _methods = []
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
-        if node.kind in [clang.cindex.CursorKind.CXX_METHOD] and \
+        if node.kind in [clang.cindex.CursorKind.CXX_METHOD, clang.cindex.CursorKind.FUNCTION_DECL] and \
             node.location.file.name == filename:    
             _name = node.spelling
             if _name.startswith("operator"):
@@ -569,13 +571,14 @@ def _parse_methods(filename, _tu):
                     "class_name": node.semantic_parent.spelling,
                     "const_method": node.is_const_method(),
                     "comment" : node.brief_comment,
+                    "plain_function" :node.kind ==  clang.cindex.CursorKind.FUNCTION_DECL,
                     "file_origin" : node.location.file.name }
                 
             #print(_tmp["result"])                    
             #pprint(_tmp["result_deps"])
             #if "<" in _tmp["result"]:
             _tmp["result_deps"] = get_template_dependencies(_tmp["result"])
-            #    pprint(_tmp)
+            # print(_tmp)
             # Methods dependencies for results
 
             _tmp["params"] = get_params_from_node(node)
@@ -671,7 +674,7 @@ def _missing_dependencies(filename, _data, _dependsOn, _provides):
     return _missing
 
 #==============================================================
-def do_parse( _root, _folders, _dest, search_paths = [] ):
+def do_parse( _root, _folders, _dest, search_paths = [], extra_args =[] ):
     # Get the files list
     _files = []
     _dirs = []
@@ -705,7 +708,7 @@ def do_parse( _root, _folders, _dest, search_paths = [] ):
     for include_file in _files:
         print(f"Parsing ({_n}/{_nTotal}): {include_file}")
         _n += 1
-        _data, _deps, _prov, _miss = parse_include_file(include_file, _dependsOn, _provides, search_paths = search_paths )
+        _data, _deps, _prov, _miss = parse_include_file(include_file, _dependsOn, _provides, search_paths = search_paths, extra_args = extra_args )
         #pprint(pf)
         #files[include_file] = pf
         files = files + _data
