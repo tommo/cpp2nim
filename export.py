@@ -763,21 +763,27 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, inheritable={
 
     _segment = ""
     _segmentPre = ""
+
+    _structsPre = []
     # Structs
     _structs = [(i[1], i[3], i[4]) for i in data if i[0] == filename and i[2] == "struct"] 
     for _filename, name, values in _structs:
         if ignore and ( name in ignore): continue
         _fname = os.path.relpath( _filename, root )
         if name in inheritable:
-            _segmentPre += get_struct( name, values, _fname, rename = rename, inheritable = True )
+            _part = get_struct( name, values, _fname, rename = rename, inheritable = True )
+            _structsPre.append( (name, _part ))
         else:
             _segment += get_struct( name, values, _fname, rename = rename) 
 
+    _structsPre.sort( key = lambda x: inheritable.index(x[0]) )
+    _segmentPre = "".join(x[1] for x in _structsPre)
     _txt += _segmentPre
     _txt += _segment
 
     _segment = ""
     _segmentPre = ""
+    _classesPre = []
     # Classes
     _classes = [(i[1], i[3],i[4]) for i in data if i[0] == filename and i[2] == "class"]     
     for _filename, name, values in _classes:
@@ -785,9 +791,11 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, inheritable={
         _fname = os.path.relpath( _filename, root )
         if name in inheritable:
             _segmentPre += get_class( name, values, _fname, rename = rename, inheritable = True )
+            _classesPre.append((name, _segmentPre))
         else:
             _segment += get_class( name, values, _fname, rename = rename)   
-
+    _classesPre.sort( key = lambda x: inheritable.index(x[0]) )
+    _segmentPre = "".join(x[1] for x in _classesPre)
     _txt += _segmentPre
     _txt += _segment
     # Typedefs
