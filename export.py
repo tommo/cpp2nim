@@ -1,65 +1,4 @@
 #!/usr/bin/env python
-""" Usage: call with <filename> <typename>
-python cpp2nim.py "/usr/include/opencascade/gp_*.hxx" occt
-python cpp2nim.py /usr/include/osg/Geode geode
-
-python cpp2nim.py "/usr/include/osg/**/*" osg
-python cpp2nim.py "/usr/include/osgViewer/**/*" osgViewer
->>> import clang.cindex
->>> index = clang.cindex.Index.create()
->>> tu = index.parse("/usr/include/opencascade/gp_Pnt.hxx", ['-x', 'c++',  "-I/usr/include/opencascade"], None, clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD)
-
-clang -Xclang -ast-dump=json -x c++ -I/usr/include/osg -fsyntax-only /usr/include/osg/Geode  > geode.json
-
-clang -Xclang -ast-dump -fno-diagnostics-color miniz.c
-c2nim --cpp --header --out:gp_Pnt.nim /usr/include/opencascade/gp_Pnt.hxx
-
-clang -Xclang -ast-dump -x c++ -I /usr/include/osg ./osg.hpp -fsyntax-only > osg.ast
-
-https://github.com/StatisKit/AutoWIG/blob/master/src/py/autowig/libclang_parser.py
------
-TODO: 
-Debe solventar los conflictos en el naming de los tipos presentes en osg_types. 
-Por ejemplo, Type en StateAttribute y Type en Array
-
-----
-TODO: ¿por qué ByteArray (Type del fichero Array no va a osg_types)?
-
------
-TODO: operators
-proc `[]=`[K, V](this: var StdMap[K, V]; key: K; val: V) {.
-  importcpp: "#[#] = #", header: "<map>".}
-
------
-TODO: to check the Array file: python cpp2nim3.py "/usr/include/osg/Array" borrame
-
------
-TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
------
-TODO: for some reason, the enum gets repited:
-    tpInt64ArrayType = 37,
-    tpLastArrayType = 37,
-
-It needs to be replaced by something like:
-   let tpLastArrayType:Type = tpInt64ArrayType
-
-C++ allows using the same ID for different ID
------
-TODO: https://nim-lang.org/docs/tut2.html#object-oriented-programming-inheritance
-Definición de tipos. Si usamos "object of <something>", en algún momento 
-habrá que hacer un "object of RootObj". También hay que tener claro si usamos:
-"ref object of RootObj"
-
-----
-TODO: /usr/include/osg/Referenced
-proc constructdepends_on*[T, M](): depends_on {.constructor,importcpp: "depends_on<T, M>".}
-
-----
-TODO: probably, inlines, shouldn't be included. The same applies to private and protected!
-
------
-TODO: functions
-"""
 
 import sys
 import string
@@ -149,6 +88,8 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
         return "clongdouble" 
     if c_type in ["float"]:
         return "cfloat"        
+    if c_type in ["double *"]:
+        return "ptr cdouble"
     if c_type in ["double"]:
         return "cdouble"
     if c_type in ["char *"]:
@@ -233,15 +174,18 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
     while c_type[-1] == "*":
         c_type = f"ptr {c_type[:-1]}"
 
+
     if c_type.startswith( "ptr float" ):
         c_type = "ptr cfloat"
 
     if c_type.startswith( "ptr Char" ):
         c_type = "cstring"
-    # print( ">>>>>>", c_type, len(c_type), c_type == 'ptr float' )
+
+    if c_type.startswith( "ptr ptr void" ):
+        c_type = "ptr pointer"
 
     if returnType and isConst:
-        return f"CPPConst[{c_type}]"
+        return f"ConstPtr[{c_type}]"
     else:
         return c_type
 
@@ -527,8 +471,11 @@ def get_class(name, data, include = None, byref = True, rename = {}, inheritable
     _tmp += get_comment(data) + "\n"
     return _tmp    
 
-def get_struct(name, data, include = None, rename={}, inheritable = False ):
+def get_struct(name, data, include = None, rename={}, inheritable = False, nofield = False ):
     if data["incomplete" ]:
+        return ''
+
+    if name == "":
         return ''
     _include = ""
     if include != None:
@@ -567,13 +514,18 @@ def get_struct(name, data, include = None, rename={}, inheritable = False ):
 
     _tmp = f'  {_nameClean}* {{.{_inheritable}{_include}importcpp: "{_name}".}} = object{_inheritance}\n'
     # print( '>>', name )
-    for f in data["fields"]:
-        # print( " ..", f )
-        fname = f["name"]
-        if not fname: continue
-        fname = clean( fname )
-        tname = get_nim_type( f["type"], rename )
-        _tmp += f'    {fname}* : {tname}\n'    
+    if not nofield:
+        for f in data["fields"]:
+            # print( " ..", f )
+            fname = f["name"]
+            if not fname: continue
+
+            #TODO: anonymous inner struct
+            if f["type"].startswith("struct "):continue
+            fname = clean( fname )
+            tname = get_nim_type( f["type"], rename )
+            _tmp += f'    {fname}* : {tname}\n'    
+
     _tmp += get_comment(data) + "\n"
     return _tmp
 
@@ -704,7 +656,7 @@ def export_txt_option(option={}):
     global noConstPtr
     noConstPtr = option.get( 'no_const', None )
 
-def export_txt(filename, data,  root= "/", rename = {}, ignore={}, inheritable={}, varargs={}):
+def export_txt(filename, data,  root= "/", rename = {}, ignore={}, ignorefields = [], inheritable={}, varargs={}):
     _txt = ""
     _txt += "import wrapping_tools\n"
     _txt += "import builtin_types\n"
@@ -770,11 +722,12 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, inheritable={
     for _filename, name, values in _structs:
         if ignore and ( name in ignore): continue
         _fname = os.path.relpath( _filename, root )
+        nofield = name in ignorefields
         if name in inheritable:
-            _part = get_struct( name, values, _fname, rename = rename, inheritable = True )
+            _part = get_struct( name, values, _fname, rename = rename, inheritable = True, nofield = nofield )
             _structsPre.append( (name, _part ))
         else:
-            _segment += get_struct( name, values, _fname, rename = rename) 
+            _segment += get_struct( name, values, _fname, rename = rename, nofield = nofield) 
 
     _structsPre.sort( key = lambda x: inheritable.index(x[0]) )
     _segmentPre = "".join(x[1] for x in _structsPre)

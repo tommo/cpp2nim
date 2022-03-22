@@ -16,49 +16,6 @@ c2nim --cpp --header --out:gp_Pnt.nim /usr/include/opencascade/gp_Pnt.hxx
 
 clang -Xclang -ast-dump -x c++ -I /usr/include/osg ./osg.hpp -fsyntax-only > osg.ast
 
-https://github.com/StatisKit/AutoWIG/blob/master/src/py/autowig/libclang_parser.py
------
-TODO: 
-Debe solventar los conflictos en el naming de los tipos presentes en osg_types. 
-Por ejemplo, Type en StateAttribute y Type en Array
-
-----
-TODO: ¿por qué ByteArray (Type del fichero Array no va a osg_types)?
-
------
-TODO: operators
-proc `[]=`[K, V](this: var StdMap[K, V]; key: K; val: V) {.
-  importcpp: "#[#] = #", header: "<map>".}
-
------
-TODO: to check the Array file: python cpp2nim3.py "/usr/include/osg/Array" borrame
-
------
-TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
------
-TODO: for some reason, the enum gets repited:
-    tpInt64ArrayType = 37,
-    tpLastArrayType = 37,
-
-It needs to be replaced by something like:
-   let tpLastArrayType:Type = tpInt64ArrayType
-
-C++ allows using the same ID for different ID
------
-TODO: https://nim-lang.org/docs/tut2.html#object-oriented-programming-inheritance
-Definición de tipos. Si usamos "object of <something>", en algún momento 
-habrá que hacer un "object of RootObj". También hay que tener claro si usamos:
-"ref object of RootObj"
-
-----
-TODO: /usr/include/osg/Referenced
-proc constructdepends_on*[T, M](): depends_on {.constructor,importcpp: "depends_on<T, M>".}
-
-----
-TODO: probably, inlines, shouldn't be included. The same applies to private and protected!
-
------
-TODO: functions
 """
 
 import sys
@@ -504,22 +461,34 @@ def _parse_struct(filename, _tu):
         if node.kind == clang.cindex.CursorKind.STRUCT_DECL and \
             node.location.file.name == filename:
 
-            mname = node.spelling
-            if mname in _visited: 
-                continue
-            _visited.add( mname )
+            # if not node.is_definition():
+            #     continue
+
+            structname = node.spelling
+            # if structname in _visited: 
+            #     continue
+            # _visited.add( structname )
 
             fields = []
             deps = []
             
-            print( ">>>>>>parse_struct", node.spelling, node.is_definition() )
+            print( ">>>>>>parse_struct", node.spelling, node.kind, node.type.kind )
             for fnode in node.type.get_fields():
-                print( " ", fnode.spelling, fnode.type.spelling )
-                fields.append( { 
-                    "name" : fnode.spelling,
-                    "type" : fnode.type.spelling, #TODO:template/array?
-                }) 
-                deps+= get_template_dependencies(fnode.type.spelling)
+                if fnode.is_anonymous():
+                    for fnode2 in fnode.type.get_fields():
+                        print( " []:", fnode2.spelling, fnode2.type.spelling )
+                        fields.append( { 
+                            "name" : fnode2.spelling,
+                            "type" : fnode2.type.spelling, #TODO:template/array?
+                        }) 
+                        deps+= get_template_dependencies(fnode2.type.spelling)
+                else:
+                    print( " ", fnode.spelling, fnode.type.spelling )
+                    fields.append( { 
+                        "name" : fnode.spelling,
+                        "type" : fnode.type.spelling, #TODO:template/array?
+                    }) 
+                    deps+= get_template_dependencies(fnode.type.spelling)
 
             _tmp = { "name" : node.spelling,
                         "comment": node.brief_comment,
@@ -535,8 +504,11 @@ def _parse_struct(filename, _tu):
                 if n.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
                     _tmp["base"].append(n.displayname)
 
+            if (not node.is_definition()) and (structname in _structs):
+                continue
+
             if node.type.get_size() >= 0:
-                _structs.update( {node.spelling : _tmp} )              
+                _structs.update( {structname : _tmp} )              
     return _structs
 
 def _parse_constructors(filename, _tu):
@@ -556,6 +528,26 @@ def _parse_constructors(filename, _tu):
 def _parse_methods(filename, _tu):
     """Parse methods and operators"""
     _methods = []
+    for depth,node in get_nodes( _tu.cursor, depth=0 ):
+        if node.kind in [clang.cindex.CursorKind.VAR_DECL] and node.type.kind == clang.cindex.TypeKind.TYPEDEF and\
+            node.location.file.name == filename:
+            vtype_decl = node.type.get_declaration()
+            _pointee = vtype_decl.underlying_typedef_type.get_pointee()
+            if _pointee.kind != clang.cindex.TypeKind.FUNCTIONPROTO:
+                continue
+            _tmp = {"name" : node.spelling,
+                "fully_qualified" : fully_qualified(node.referenced),
+                "result" : _pointee.get_result().spelling,
+                "class_name": "",
+                "const_method": False,
+                "comment" : "",
+                "plain_function" :True,
+                "file_origin" : node.location.file.name }
+            _tmp["params"] = get_params_from_node(vtype_decl)
+            _tmp["result_deps"] = get_template_dependencies(_tmp["result"])
+            _methods.append(_tmp)
+                
+
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
         if node.kind in [clang.cindex.CursorKind.CXX_METHOD, clang.cindex.CursorKind.FUNCTION_DECL] and \
             node.location.file.name == filename:    

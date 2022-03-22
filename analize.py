@@ -1,88 +1,4 @@
 #!/usr/bin/env python
-""" Usage: call with <filename> <typename>
-python cpp2nim.py "/usr/include/opencascade/gp_*.hxx" occt
-python cpp2nim.py /usr/include/osg/Geode geode
-
-python cpp2nim.py "/usr/include/osg/**/*" osg
-python cpp2nim.py "/usr/include/osgViewer/**/*" osgViewer
->>> import clang.cindex
->>> index = clang.cindex.Index.create()
->>> tu = index.parse("/usr/include/opencascade/gp_Pnt.hxx", ['-x', 'c++',  "-I/usr/include/opencascade"], None, clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD)
-
-clang -Xclang -ast-dump=json -x c++ -I/usr/include/osg -fsyntax-only /usr/include/osg/Geode  > geode.json
-
-clang -Xclang -ast-dump -fno-diagnostics-color miniz.c
-c2nim --cpp --header --out:gp_Pnt.nim /usr/include/opencascade/gp_Pnt.hxx
-
-clang -Xclang -ast-dump -x c++ -I /usr/include/osg ./osg.hpp -fsyntax-only > osg.ast
-
-https://github.com/StatisKit/AutoWIG/blob/master/src/py/autowig/libclang_parser.py
------
-TODO: https://forum.nim-lang.org/t/7324
-
-/home/jose/src/3d/osg/osg/Geometry.nim(26, 62) Error: type mismatch: got <Options> but expected 'CopyOp = object'
-
-proc constructGeometry*(geometry: Geometry, copyop: CopyOp = SHALLOW_COPY): Geometry {.constructor,importcpp: "osg::Geometry::Geometry(@)".}
-
-the solution is to do:
-
-1. Replacing:
-$ sed -i 's/CopyOp = SHALLOW_COPY/CopyOp = constructCopyOp(CopyFlags(SHALLOW_COPY))/g' *
-
-2. Adding:
-from CopyOp import constructCopyOp,CopyFlags
-
-----
-TODO: "value_type" debería ser "Value_type"
-
-
-----
-TODO: VectorGLuint se define en PrimitiveSet y lo pide PrimitiveSetIndirect
-(Línea 49)
-
----
-TODO:  PrimitiveSetIndirect línea 74
-En el mismo fichero:
-proc constructDrawElementsIndirect*(primType: psType, mode: GLenum = 0
- Error: type mismatch: got <int literal(0)> but expected 'GLenum = distinct uint32'
- (creo que debería usar nil)
-
-
------
-TODO: operators
-proc `[]=`[K, V](this: var StdMap[K, V]; key: K; val: V) {.
-  importcpp: "#[#] = #", header: "<map>".}
-
------
-TODO: to check the Array file: python cpp2nim3.py "/usr/include/osg/Array" borrame
-
------
-TODO: si sale Clase & significa que hay que usar byref y en caso contrario: bycopy
------
-TODO: for some reason, the enum gets repited:
-    tpInt64ArrayType = 37,
-    tpLastArrayType = 37,
-
-It needs to be replaced by something like:
-   let tpLastArrayType:Type = tpInt64ArrayType
-
-C++ allows using the same ID for different ID
------
-TODO: https://nim-lang.org/docs/tut2.html#object-oriented-programming-inheritance
-Definición de tipos. Si usamos "object of <something>", en algún momento 
-habrá que hacer un "object of RootObj". También hay que tener claro si usamos:
-"ref object of RootObj"
-
-----
-TODO: /usr/include/osg/Referenced
-proc constructdepends_on*[T, M](): depends_on {.constructor,importcpp: "depends_on<T, M>".}
-
-----
-TODO: probably, inlines, shouldn't be included. The same applies to private and protected!
-
------
-TODO: functions
-"""
 
 import sys
 import clang.cindex
@@ -553,7 +469,7 @@ def export_nim_option( option ):
     rootNameSpace = option.get( 'root_namespace', None )
     export_txt_option( option )
 
-def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={}, varargs=[] ):
+def export_nim( dest, parsed, output, root = None, ignore={}, ignorefields = [], inheritable={}, varargs=[], rename={} ):
     import pickle
     # Read the command line: it takes a glob and a destination
     _dest = dest
@@ -697,7 +613,9 @@ def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={}, va
             data = [(f"{_dest}.nim", None, "import", [_fname])] + data             
 
     # Renaming
+    rename2 = rename
     rename = _get_renames_identifiers(_newfilename, data)
+    rename.update(rename2)
     #for _type, _list in _repeated.items():
     #    for _file, _full in _list:
     #        _v = get_new_name(_full, list(rename.values()))
@@ -711,7 +629,7 @@ def export_nim( dest, parsed, output, root = None, ignore={}, inheritable={}, va
     #     print( destFile)
 
     for destFile in _destFiles:
-        _txt = export_txt( destFile, data, root = _root, rename=rename, ignore = ignore, inheritable=inheritable, varargs = varargs)
+        _txt = export_txt( destFile, data, root = _root, rename=rename, ignore = ignore, ignorefields = ignorefields, inheritable=inheritable, varargs = varargs)
         _fname = os.path.join(_output , destFile)        
         _fp = open(_fname, "w")
         _fp.write( _txt )
