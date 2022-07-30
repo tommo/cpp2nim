@@ -28,3 +28,8 @@ def sub_in_file(filename, oldToNew):
     f.close()
     os.rename(filename+'.new', filename)
     os.unlink(filename+'.bak')
+
+def append_to_file( filename, string ):
+    f = open(filename, 'a')
+    f.write(string)
+    f.close()
