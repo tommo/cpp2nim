@@ -321,7 +321,7 @@ def _parse_enums(filename, _tu):
         _tmp = {}
         _isConst = False
         if node.kind == clang.cindex.CursorKind.ENUM_DECL and \
-           node.location.file.name == filename:
+           node.is_definition() and node.location.file.name == filename:
             _typeName = fully_qualified(node.referenced)
             if node.spelling == "":
                 _isConst = True
@@ -364,6 +364,7 @@ def _parse_enums(filename, _tu):
 def _parse_typedef(filename, _tu):
     _typedefs = {}
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
+        if node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE: continue
         if not ( node.location.file and node.location.file.name == filename ): continue
         if node.kind in [clang.cindex.CursorKind.TYPE_REF]:
             refKind = node.referenced.kind
@@ -417,6 +418,7 @@ def _parse_class(filename, _tu):
     """Parse classes (not forward declarations)"""
     _classes = {}
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
+        if node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE: continue
         if node.kind in [clang.cindex.CursorKind.CLASS_DECL, clang.cindex.CursorKind.CLASS_TEMPLATE] and \
             node.is_definition() and node.location.file.name == filename:             
             _tmp = { "name" : node.spelling,
@@ -457,10 +459,9 @@ def _parse_struct(filename, _tu):
     _structs = {}
     _visited = set()
     for depth, node in get_nodes( _tu.cursor, depth = 0 ):
-
+        if node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE: continue
         if node.kind == clang.cindex.CursorKind.STRUCT_DECL and \
-            node.location.file.name == filename:
-
+            node.is_definition() and node.location.file.name == filename:
             # if not node.is_definition():
             #     continue
 
@@ -529,6 +530,7 @@ def _parse_methods(filename, _tu):
     """Parse methods and operators"""
     _methods = []
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
+        if node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE: continue
         if node.kind in [clang.cindex.CursorKind.VAR_DECL] and node.type.kind == clang.cindex.TypeKind.TYPEDEF and\
             node.location.file.name == filename:
             vtype_decl = node.type.get_declaration()
@@ -549,6 +551,7 @@ def _parse_methods(filename, _tu):
                 
 
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
+        if node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE: continue
         if node.kind in [clang.cindex.CursorKind.CXX_METHOD, clang.cindex.CursorKind.FUNCTION_DECL] and \
             node.location.file.name == filename:    
             _name = node.spelling
@@ -666,7 +669,7 @@ def _missing_dependencies(filename, _data, _dependsOn, _provides):
     return _missing
 
 #==============================================================
-def do_parse( _root, _folders, _dest, search_paths = [], extra_args =[] ):
+def do_parse( _root, _folders, _dest, search_paths = [], extra_args =[], ignore = [] ):
     # Get the files list
     _files = []
     _dirs = []
@@ -698,6 +701,7 @@ def do_parse( _root, _folders, _dest, search_paths = [], extra_args =[] ):
     _nTotal = len(_files)
     _n = 1
     for include_file in _files:
+        if include_file in ignore: continue
         print(f"Parsing ({_n}/{_nTotal}): {include_file}")
         _n += 1
         _data, _deps, _prov, _miss = parse_include_file(include_file, _dependsOn, _provides, search_paths = search_paths, extra_args = extra_args )

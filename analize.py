@@ -629,6 +629,7 @@ def export_nim( dest, parsed, output, root = None, ignore={}, ignorefields = [],
     #     print( destFile)
 
     for destFile in _destFiles:
+        print( "export:", destFile )
         _txt = export_txt( destFile, data, root = _root, rename=rename, ignore = ignore, ignorefields = ignorefields, inheritable=inheritable, varargs = varargs)
         _fname = os.path.join(_output , destFile)        
         _fp = open(_fname, "w")

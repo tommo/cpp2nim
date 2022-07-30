@@ -29,11 +29,14 @@ def get_nim_proctype( c_type, rename = {} ):
     
     out = "proc("
     count = 0
-    for x in inner.split(","):
-        if count > 0:
-            out = out + ','
-        out = out + f'arg_{count}:{get_nim_type(x)}'
-        count += 1
+    # print( c_type )
+    if len(inner) > 0:
+        for x in inner.split(","):
+            print(x)
+            if count > 0:
+                out = out + ','
+            out = out + f'arg_{count}:{get_nim_type(x)}'
+            count += 1
     
     if rtype != "void":
         out = out + f'):{get_nim_type( rtype )}' + '{.cdecl}'
@@ -103,9 +106,9 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
     if c_type in ["signed char"]:
         return "cschar"
     if c_type in ["unsigned char"]:
-        return "cuchar"
+        return "uint8"
     if c_type in ["unsigned short"]:
-        return "cushort"
+        return "uint16"
     if c_type in ["unsigned int"]:
         return "cuint"
     if c_type in ["unsigned long long"]:
@@ -171,8 +174,9 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
         c_type = c_type.replace(">", "]")
 
     c_type = c_type.strip()
-    while c_type[-1] == "*":
-        c_type = f"ptr {c_type[:-1]}"
+    if c_type:
+        while c_type[-1] == "*":
+            c_type = f"ptr {c_type[:-1]}"
 
 
     if c_type.startswith( "ptr float" ):
@@ -371,6 +375,10 @@ def get_method(data, rename = {}, visited=None, varargs={} ):
         _importName = "#[#]"
         _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.{_importMethod}: "{_importName}"{_pragmas}.}}\n'  
 
+    elif _isOperator and _methodName in ["`()`"]:
+        # continue #Ignore
+        return False
+
     else:
         _tmp = f'proc {_methodName}*{_templParams}({_params}){_return}  {{.{_importMethod}: "{_importName}"{_pragmas}.}}\n'
 
@@ -449,7 +457,7 @@ def get_class(name, data, include = None, byref = True, rename = {}, inheritable
     _template = ""
 
     if inheritable :
-        _inheritable = "inheritable,"
+        _inheritable = "inheritable, "
     else:
         _inheritable = ""
 
@@ -484,7 +492,7 @@ def get_struct(name, data, include = None, rename={}, inheritable = False, nofie
 
     _nameClean = clean(name)
     _name = data["fully_qualified"]
-    print( data )
+    # print( data )
 
     _inheritance = ""
     if len(data["base"]) > 0:
@@ -508,7 +516,7 @@ def get_struct(name, data, include = None, rename={}, inheritable = False, nofie
     """
     #_tmp = f'  {_nameClean}*{_template} {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
     if inheritable :
-        _inheritable = "inheritable,"
+        _inheritable = "inheritable, "
     else:
         _inheritable = ""
 
@@ -677,6 +685,7 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, ignorefields 
         _items = [os.path.splitext( i )[0] for i in items]
         _tmp = ", ".join(_items)
         _txt += f"import {_tmp}\n"
+        # _txt += f"export {_tmp}\n"
     if len( _imports ) > 0:
         _txt += "\n\n"
      
@@ -709,6 +718,7 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, ignorefields 
     _enums = [i for i in data if i[0] == filename and i[2] == "enum"] 
     for _, _filename, _, name, values in _enums:
         if ignore and ( name in ignore): continue
+        # print( name, ignore )
         _fname = os.path.relpath( _filename, root )
         _txt += get_enum( name, values, _fname, rename = rename)
 
@@ -743,14 +753,17 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, ignorefields 
         if ignore and ( name in ignore): continue
         _fname = os.path.relpath( _filename, root )
         if name in inheritable:
-            _segmentPre += get_class( name, values, _fname, rename = rename, inheritable = True )
-            _classesPre.append((name, _segmentPre))
+            _part = get_class( name, values, _fname, rename = rename, inheritable = True )
+            _classesPre.append((name, _part))
         else:
             _segment += get_class( name, values, _fname, rename = rename)   
+
     _classesPre.sort( key = lambda x: inheritable.index(x[0]) )
     _segmentPre = "".join(x[1] for x in _classesPre)
     _txt += _segmentPre
     _txt += _segment
+    _segment = ""
+    _segmentPre = ""
     # Typedefs
     _typedefs = [(i[1], i[3],i[4]) for i in data if i[0] == filename and i[2] == "typedef"] 
     for _filename, name, values in _typedefs:
