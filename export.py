@@ -9,6 +9,7 @@ import re
 from pprint import pprint
 
 noConstPtr = False
+PRINT_STRUCT = False
 
 kernelA = re.compile("([^<]+)[<]*([^>]*)[>]*")
 def get_nim_arraytype( c_type, rename = {} ):
@@ -32,7 +33,6 @@ def get_nim_proctype( c_type, rename = {} ):
     # print( c_type )
     if len(inner) > 0:
         for x in inner.split(","):
-            print(x)
             if count > 0:
                 out = out + ','
             out = out + f'arg_{count}:{get_nim_type(x)}'
@@ -230,11 +230,15 @@ def export_params(params, rename = {}):
             _params += f'a{n:02d}: '
 
         _type = get_nim_type(p[1], rename)
-        if len(p) > 2:
+        if len(p) > 2 and not _type.startswith("array"):
             if p[2] != None:
                 p2 = p[2]
-                if _type.endswith("Enum"):
+                if _type.endswith("Enum") and p2 != "nil":
                     p2 = _type + "." + p[2]
+                p2 = p2.replace("|"," or ")
+                p2 = p2.replace("||"," or ")
+                p2 = p2.replace("&"," and ")
+                p2 = p2.replace("&&"," and ")
                 _type += f" = {p2}"
 
         _params += _type
@@ -316,7 +320,15 @@ def get_constructor(data,rename = {}, _dup={}):
 def get_method(data, rename = {}, visited=None, varargs={} ):
     # Parameters
     # print(data["params"])
-    _params = export_params(data["params"], rename)
+    rawparams = data["params"]
+    hasValist = False
+    if len(rawparams) > 0:
+        lastType = rawparams[len(rawparams)-1][1]
+        if lastType == "va_list":
+            hasValist = True
+            rawparams=rawparams[0:len(rawparams)-1]
+
+    _params = export_params(rawparams, rename)
     # - Bear in mind the 'in-place' case
     _classname = "ptr " + data["class_name"]
     # if not data["const_method"]:
@@ -332,7 +344,7 @@ def get_method(data, rename = {}, visited=None, varargs={} ):
         _importName = data["fully_qualified"]    
         _importMethod = "importc"
 
-    isVararg = _importName in varargs
+    isVararg = hasValist or (_importName in varargs)
 
     # Returned type
     _return = ""
@@ -340,9 +352,12 @@ def get_method(data, rename = {}, visited=None, varargs={} ):
         _result = data["result"].strip()
         # if _result.startswith("const "):
         #     _result = _result[6:]
-        if _result[-1] == "&":
+        isRef = _result[-1] == "&"
+        if isRef:
             _result = _result[:-1].strip()
         _result = get_nim_type( _result, rename, True )
+        if isRef:
+            _result = "var " + _result
         _return = f': {_result}'
 
     # Method name (lowercase the first letter)
@@ -373,7 +388,7 @@ def get_method(data, rename = {}, visited=None, varargs={} ):
 
     elif _isOperator and _methodName in ["`[]`"]:
         _importName = "#[#]"
-        _tmp = f'proc {_methodName}*{_templParams}({_params})  {{.{_importMethod}: "{_importName}"{_pragmas}.}}\n'  
+        _tmp = f'proc {_methodName}*{_templParams}({_params}) {_return} {{.{_importMethod}: "{_importName}"{_pragmas}.}}\n'  
 
     elif _isOperator and _methodName in ["`()`"]:
         # continue #Ignore
@@ -521,10 +536,10 @@ def get_struct(name, data, include = None, rename={}, inheritable = False, nofie
         _inheritable = ""
 
     _tmp = f'  {_nameClean}* {{.{_inheritable}{_include}importcpp: "{_name}".}} = object{_inheritance}\n'
-    # print( '>>', name )
+    if PRINT_STRUCT:  print( '>>', name )
     if not nofield:
         for f in data["fields"]:
-            # print( " ..", f )
+            if PRINT_STRUCT: print( " ..", f )
             fname = f["name"]
             if not fname: continue
 
@@ -597,26 +612,26 @@ def get_root(_blob):
             _out += i + "/"
     return _out
 
-def get_params_from_node(mynode):
-    _params = []
-    for i in mynode.get_children():
-        if i.kind == clang.cindex.CursorKind.PARM_DECL:
-            _paramName = i.displayname
+# def get_params_from_node(mynode):
+#     _params = []
+#     for i in mynode.get_children():
+#         if i.kind == clang.cindex.CursorKind.PARM_DECL:
+#             _paramName = i.displayname
 
-            _default = None
-            # Getting default values in params
-            for j in i.get_children():
-                for k in j.get_children():                                  
-                    if k.kind == clang.cindex.CursorKind.UNEXPOSED_EXPR:
-                        for m in k.get_tokens():
-                            _default = m.spelling
-                    if k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
-                        try:
-                            _default = k.get_tokens().__next__().spelling 
-                        except:
-                            pass  
-            _params.append((i.displayname, i.type.spelling, _default))                                                          
-    return _params    
+#             _default = None
+#             # Getting default values in params
+#             for j in i.get_children():
+#                 for k in j.get_children():                                  
+#                     if k.kind == clang.cindex.CursorKind.UNEXPOSED_EXPR:
+#                         for m in k.get_tokens():
+#                             _default = m.spelling
+#                     if k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
+#                         try:
+#                             _default = k.get_tokens().__next__().spelling 
+#                         except:
+#                             pass  
+#             _params.append((i.displayname, i.type.spelling, _default))                                                          
+#     return _params    
 
 def fully_qualified(c):
     if c is None:

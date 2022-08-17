@@ -2,7 +2,7 @@ import os
 import os.path
 import re
 
-def sub_in_file(filename, oldToNew):
+def sub_in_file(filename, oldToNew, defaultMode = 'regex'):
     """
     I replace the text `oldstr' with `newstr' in `filename' using sed
     and mv.
@@ -16,7 +16,7 @@ def sub_in_file(filename, oldToNew):
             k,v,t = pair
         else:
             k,v = pair
-            t = "regex"
+            t = defaultMode
 
         if t == 'plain':
             d = d.replace(k, v)

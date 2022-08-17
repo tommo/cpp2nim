@@ -29,6 +29,41 @@ from pprint import pprint
 from pathlib import Path
 import collections
 
+PRINT_STRUCT = False
+
+files = {}
+def getCodeSpan( cursor ):
+    filename = cursor.location.file.name
+    extent = cursor.extent
+    lines = files.get( filename, None )
+    if lines == None:
+        fp = open( filename, 'r' )
+        lines = fp.readlines()
+        files[filename] = lines
+    output = ''
+    lineIdx = extent.start.line - 1
+    off0 = extent.start.column - 1
+    off1 = extent.end.column - 1
+    if extent.start.line < extent.end.line:
+        off1 = -1
+    l = lines[lineIdx]
+    if off1 < 0:
+        return l[off0:]
+    else:
+        return l[off0:off1]
+
+
+def test_traverse(node, level):
+    print('%s %-35s %-20s %-10s [%-6s:%s - %-6s:%s] %s %s ' % (' ' * level,
+    node.kind, node.spelling, node.type.spelling, node.extent.start.line, node.extent.start.column,
+    node.extent.end.line, node.extent.end.column, node.location.file, node.mangled_name))
+    if node.kind == clang.cindex.CursorKind.CALL_EXPR:
+        for arg in node.get_arguments():
+            print("ARG=%s %s" % (arg.kind, arg.spelling))
+
+    for child in node.get_children():
+        test_traverse(child, level+1)
+
 def print_line(node, field, spc, ident= 0):
     try:
         param = getattr(node, field)
@@ -157,22 +192,91 @@ def get_params_from_node(mynode):
             _paramName = i.displayname
             _default = None
             # Getting default values in params
+            if _paramName == "_init":
+                test_traverse( i, 0 )
             for j in i.get_children():
-                # print( "param:", _paramName, j.kind )
+                iscall = False
                 if j.kind == clang.cindex.CursorKind.DECL_REF_EXPR:
                     for m in j.get_tokens():
                         _default = m.spelling
                     continue
+
+                elif j.kind == clang.cindex.CursorKind.CALL_EXPR:
+                    _default = getCodeSpan( j )
+                    continue
+                    # _default = j.spelling + "("
+                    # iscall = True
+
+                elif j.kind == clang.cindex.CursorKind.BINARY_OPERATOR:
+                    _default = getCodeSpan( j )
+                    continue
+
+                elif j.kind == clang.cindex.CursorKind.UNARY_OPERATOR:
+                    _default = getCodeSpan( j )
+                    continue
+
+                elif j.kind == clang.cindex.CursorKind.PAREN_EXPR:
+                    _default = getCodeSpan( j )
+                    continue
+
+                elif j.kind == clang.cindex.CursorKind.UNEXPOSED_EXPR:
+                    _default = getCodeSpan( j )
+                    if _default[0:1] == "=":
+                        _default = _default[1:].lstrip()
+                    continue
+
+                elif j.kind in [clang.cindex.CursorKind.CXX_BOOL_LITERAL_EXPR] :
+                    _default = getCodeSpan( j )
+                    continue
+                    # try:
+                    #     _default = j.get_tokens().__next__().spelling 
+                    # except:
+                    #     _default = "???"
+
+                elif j.kind in [clang.cindex.CursorKind.INTEGER_LITERAL, clang.cindex.CursorKind.FLOATING_LITERAL]:
+                    _default = getCodeSpan( j )
+                    continue
+                    # try:
+                    #     _default = j.get_tokens().__next__().spelling 
+                    # except:
+                    #     _default = "???"
+                        # pass
+
+                count = 0
                 for k in j.get_children():
+                    if iscall and count > 0:
+                        _default += ", "
+                    count+=1
                     # print( ">>:", _paramName, k.kind )
                     if k.kind == clang.cindex.CursorKind.UNEXPOSED_EXPR:
+                        if _default == None: _default = ""
                         for m in k.get_tokens():
-                            _default = m.spelling
-                    elif k.kind == clang.cindex.CursorKind.INTEGER_LITERAL:
+                            _default += m.spelling
+
+                    elif k.kind == clang.cindex.CursorKind.CALL_EXPR:
+                        for m in k.get_tokens():
+                            if m.spelling == "=": continue
+                            _default += m.spelling
+
+                    elif k.kind == clang.cindex.CursorKind.GNU_NULL_EXPR:
+                        _default = "nil"
+
+                    elif k.kind == clang.cindex.CursorKind.STRING_LITERAL:
                         try:
                             _default = k.get_tokens().__next__().spelling 
                         except:
                             pass  
+
+                    elif k.kind in [clang.cindex.CursorKind.INTEGER_LITERAL, clang.cindex.CursorKind.FLOATING_LITERAL] :
+                        if _default == None: _default = ""
+                        try:
+                            _default += k.get_tokens().__next__().spelling 
+                        except:
+                            _default += "???"
+                if iscall:
+                    _default += ")"
+            if _default == "NULL":
+                _default = "nil"
             _params.append((i.displayname, i.type.spelling, _default))                                                          
     return _params    
 
@@ -247,9 +351,8 @@ def parse_include_file(filename, dependsOn, provides, search_paths = [], extra_a
 
     searchFlags = [ f"-I{pathitem}" for pathitem in search_paths ]
     _args = []
-    _args += ['-XClang' ]
     _args += ['-x', 'c++' ]
-    # _args += ['-std=c++17']
+    _args += ['-std=c++17']
 
     _args += extra_args
     # _args += ['-include', 'hack.h']
@@ -263,6 +366,8 @@ def parse_include_file(filename, dependsOn, provides, search_paths = [], extra_a
             clang.cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES | \
             clang.cindex.TranslationUnit.PARSE_INCOMPLETE
     _tu = _index.parse(filename, _args, None, _opts)
+    for diag in _tu.diagnostics:
+        print(diag)
 
     _consts, _enums, _repeated = _parse_enums(filename, _tu)  # (list, dict, dict)
 
@@ -473,18 +578,18 @@ def _parse_struct(filename, _tu):
             fields = []
             deps = []
             
-            print( ">>>>>>parse_struct", node.spelling, node.kind, node.type.kind )
+            if PRINT_STRUCT: print( ">>>>>>parse_struct", node.spelling, node.kind, node.type.kind )
             for fnode in node.type.get_fields():
                 if fnode.is_anonymous():
                     for fnode2 in fnode.type.get_fields():
-                        print( " []:", fnode2.spelling, fnode2.type.spelling )
+                        if PRINT_STRUCT:  print( " []:", fnode2.spelling, fnode2.type.spelling )
                         fields.append( { 
                             "name" : fnode2.spelling,
                             "type" : fnode2.type.spelling, #TODO:template/array?
                         }) 
                         deps+= get_template_dependencies(fnode2.type.spelling)
                 else:
-                    print( " ", fnode.spelling, fnode.type.spelling )
+                    if PRINT_STRUCT: print( " ", fnode.spelling, fnode.type.spelling )
                     fields.append( { 
                         "name" : fnode.spelling,
                         "type" : fnode.type.spelling, #TODO:template/array?
