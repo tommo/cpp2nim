@@ -470,6 +470,7 @@ def _parse_typedef(filename, _tu):
     _typedefs = {}
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
         if node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE: continue
+        if node.access_specifier == clang.cindex.AccessSpecifier.PROTECTED: continue
         if not ( node.location.file and node.location.file.name == filename ): continue
         if node.kind in [clang.cindex.CursorKind.TYPE_REF]:
             refKind = node.referenced.kind
@@ -512,10 +513,22 @@ def _parse_typedef(filename, _tu):
                     _tmp["typedef_type"] = "function"  
 
             elif _kind == clang.cindex.TypeKind.FUNCTIONPROTO:
-                    _result = node.underlying_typedef_type.get_result().spelling
-                    _tmp["result"] = _result
-                    _tmp["typedef_type"] = "function"  
-                    print("_name", _tmp )
+                _result = node.underlying_typedef_type.get_result().spelling
+                _tmp["result"] = _result
+                _tmp["typedef_type"] = "function"  
+
+            else:
+                inner = node.underlying_typedef_type.get_declaration()
+                if inner.kind == clang.cindex.CursorKind.STRUCT_DECL:
+                    # if node.displayname == "ecs_type_t":
+                    #     pp(inner)
+                    if inner.spelling != "": continue
+                    _tmp = _parse_struct_inner( inner, 0 )
+                    _tmp["typedef_type"] = "struct"
+                    _tmp["fully_qualified"] = fully_qualified(node.referenced)
+                # if node.displayname == "ecs_type_t":
+                #     pp(node.underlying_typedef_type.get_declaration())
+
             _typedefs.update({_name : _tmp})
     return _typedefs
 
@@ -524,6 +537,7 @@ def _parse_class(filename, _tu):
     _classes = {}
     for depth,node in get_nodes( _tu.cursor, depth=0 ):
         if node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE: continue
+        if node.access_specifier == clang.cindex.AccessSpecifier.PROTECTED: continue
         if node.kind in [clang.cindex.CursorKind.CLASS_DECL, clang.cindex.CursorKind.CLASS_TEMPLATE] and \
             node.is_definition() and node.location.file.name == filename:             
             _tmp = { "name" : node.spelling,
@@ -560,6 +574,44 @@ def _parse_class(filename, _tu):
             _classes[_name] = _tmp          
     return _classes
 
+def _parse_struct_inner( node, depth ):
+    fields = []
+    deps = []
+    
+    if PRINT_STRUCT: print( ">>>>>>parse_struct", node.spelling, node.kind, node.type.kind )
+    for fnode in node.type.get_fields():
+        if fnode.is_anonymous():
+            for fnode2 in fnode.type.get_fields():
+                if PRINT_STRUCT:  print( " []:", fnode2.spelling, fnode2.type.spelling )
+                fields.append( { 
+                    "name" : fnode2.spelling,
+                    "type" : fnode2.type.spelling, #TODO:template/array?
+                }) 
+                deps+= get_template_dependencies(fnode2.type.spelling)
+        else:
+            if PRINT_STRUCT: print( " ", fnode.spelling, fnode.type.spelling )
+            fields.append( { 
+                "name" : fnode.spelling,
+                "type" : fnode.type.spelling, #TODO:template/array?
+            }) 
+            deps+= get_template_dependencies(fnode.type.spelling)
+
+    _tmp = { "name" : node.spelling,
+                "comment": node.brief_comment,
+                "base" : [],
+                "fully_qualified": fully_qualified(node.referenced),
+                "template_params" : [],
+                "underlying_deps" : deps,
+                "fields" : fields,
+                "incomplete" : node.type.get_size() < 0
+            }
+
+    for _, n in get_nodes( node, depth = depth ):
+        if n.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
+            _tmp["base"].append(n.displayname)
+
+    return _tmp
+
 def _parse_struct(filename, _tu):
     _structs = {}
     _visited = set()
@@ -574,47 +626,13 @@ def _parse_struct(filename, _tu):
             # if structname in _visited: 
             #     continue
             # _visited.add( structname )
-
-            fields = []
-            deps = []
-            
-            if PRINT_STRUCT: print( ">>>>>>parse_struct", node.spelling, node.kind, node.type.kind )
-            for fnode in node.type.get_fields():
-                if fnode.is_anonymous():
-                    for fnode2 in fnode.type.get_fields():
-                        if PRINT_STRUCT:  print( " []:", fnode2.spelling, fnode2.type.spelling )
-                        fields.append( { 
-                            "name" : fnode2.spelling,
-                            "type" : fnode2.type.spelling, #TODO:template/array?
-                        }) 
-                        deps+= get_template_dependencies(fnode2.type.spelling)
-                else:
-                    if PRINT_STRUCT: print( " ", fnode.spelling, fnode.type.spelling )
-                    fields.append( { 
-                        "name" : fnode.spelling,
-                        "type" : fnode.type.spelling, #TODO:template/array?
-                    }) 
-                    deps+= get_template_dependencies(fnode.type.spelling)
-
-            _tmp = { "name" : node.spelling,
-                        "comment": node.brief_comment,
-                        "base" : [],
-                        "fully_qualified": fully_qualified(node.referenced),
-                        "template_params" : [],
-                        "underlying_deps" : deps,
-                        "fields" : fields,
-                        "incomplete" : node.type.get_size() < 0
-                    }
-
-            for _, n in get_nodes( node, depth = depth ):
-                if n.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
-                    _tmp["base"].append(n.displayname)
+            _tmp = _parse_struct_inner( node, depth )
 
             if (not node.is_definition()) and (structname in _structs):
                 continue
 
             if node.type.get_size() >= 0:
-                _structs.update( {structname : _tmp} )              
+                _structs.update( {structname : _tmp} )
     return _structs
 
 def _parse_constructors(filename, _tu):

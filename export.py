@@ -52,6 +52,9 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
     isVar = True
     isConst = False
 
+    if c_type in ["const void *"]:
+        return "ConstPointer"
+
     if c_type.endswith("const *"):
         isConst = True
         c_type = c_type[:-7]+"*"
@@ -99,7 +102,10 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
         if isVar:
             return "cstring"
         else:
-            return "ccstring"
+            if isConst:
+                return "ccstring"
+            else:
+                return "cstring"
 
     if c_type in ["char"]:
         return "cchar"
@@ -189,12 +195,12 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
         c_type = "ptr pointer"
 
     if returnType and isConst:
-        return f"ConstPtr[{c_type}]"
-    else:
-        return c_type
+        if c_type.startswith("ptr "):
+            return f"ConstPtr[{c_type[4:]}]"
+            
+    return c_type
 
-
-NIM_KEYWORDS = ["addr", "and", "as", "asm", "bind", "block", "break",
+NIM_KEYWORDS = ["addr", "array", "and", "as", "asm", "bind", "block", "break",
                 "case", "cast", "concept", "const", "continue", "converter",
                 "defer", "discard", "distinct", "div", "do", "elif", "else",
                 "end", "enum", "except", "export", "finally", "for", "from",
@@ -348,7 +354,7 @@ def get_method(data, rename = {}, visited=None, varargs={} ):
 
     # Returned type
     _return = ""
-    if data["result"] not in ["void", "void *"]:
+    if data["result"] not in ["void"]:
         _result = data["result"].strip()
         # if _result.startswith("const "):
         #     _result = _result[6:]
@@ -407,13 +413,16 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
     #if "underlying_deps" in data:
     #    print(data["underlying"])
     #else:
+    _deftype = data["typedef_type"]
+    if _deftype == "struct":
+        return get_struct( name, data, include, rename )
+
     underlying =  data["underlying"]
     _type = get_nim_type( underlying, rename )
     _include = ""
     if include != None:
         _include = f'header: "{include}", '
     
-    _deftype = data["typedef_type"]
     if _deftype == "function":
         # ActiveTextureProc* = proc (texture: GLenum)
         _return = ""
@@ -542,12 +551,16 @@ def get_struct(name, data, include = None, rename={}, inheritable = False, nofie
             if PRINT_STRUCT: print( " ..", f )
             fname = f["name"]
             if not fname: continue
-
             #TODO: anonymous inner struct
             if f["type"].startswith("struct "):continue
             fname = clean( fname )
             tname = get_nim_type( f["type"], rename )
-            _tmp += f'    {fname}* : {tname}\n'    
+            if fname.startswith("_"):
+                continue
+            if fname.endswith("_"):
+                _tmp += f'    {fname[:-1]}* {{.importcpp:"{fname}".}}: {tname}\n'
+            else:
+                _tmp += f'    {fname}* : {tname}\n' 
 
     _tmp += get_comment(data) + "\n"
     return _tmp
