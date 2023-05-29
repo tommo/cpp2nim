@@ -31,6 +31,8 @@ import collections
 
 PRINT_STRUCT = False
 
+_visitedEnum = {}
+
 files = {}
 def getCodeSpan( cursor ):
     filename = cursor.location.file.name
@@ -369,6 +371,10 @@ def parse_include_file(filename, dependsOn, provides, search_paths = [], extra_a
     for diag in _tu.diagnostics:
         print(diag)
 
+    _typedefs     = _parse_typedef(filename, _tu) # dict
+    for key,value in _typedefs.items():
+        _data.append( (filename, "typedef", key, value))    
+    
     _consts, _enums, _repeated = _parse_enums(filename, _tu)  # (list, dict, dict)
 
     for i in _consts:
@@ -380,10 +386,6 @@ def parse_include_file(filename, dependsOn, provides, search_paths = [], extra_a
     for key,value in _repeated.items():
         _data.append( (filename, "repeated", key, value))
 
-    _typedefs     = _parse_typedef(filename, _tu) # dict
-    for key,value in _typedefs.items():
-        _data.append( (filename, "typedef", key, value))    
-    
     _classes      = _parse_class(filename, _tu)
     for key,value in _classes.items():
         _data.append( (filename, "class", key, value))
@@ -428,6 +430,7 @@ def _parse_enums(filename, _tu):
         if node.kind == clang.cindex.CursorKind.ENUM_DECL and \
            node.is_definition() and node.location.file.name == filename:
             _typeName = fully_qualified(node.referenced)
+            if _visitedEnum.get(node.hash, False ): continue
             if node.spelling == "":
                 _isConst = True
             else:
@@ -504,7 +507,6 @@ def _parse_typedef(filename, _tu):
             _tmp["params"] = get_params_from_node(node)
             
             _kind = node.underlying_typedef_type.kind
-
             if _kind == clang.cindex.TypeKind.POINTER:
                 _pointee = node.underlying_typedef_type.get_pointee()
                 if _pointee.kind == clang.cindex.TypeKind.FUNCTIONPROTO:
@@ -526,6 +528,24 @@ def _parse_typedef(filename, _tu):
                     _tmp = _parse_struct_inner( inner, 0 )
                     _tmp["typedef_type"] = "struct"
                     _tmp["fully_qualified"] = fully_qualified(node.referenced)
+
+                elif inner.kind == clang.cindex.CursorKind.ENUM_DECL:
+                    if inner.spelling != "": continue
+                    _visitedEnum[inner.hash] = True
+                    _tmp = {
+                        "underlying": node.underlying_typedef_type.spelling,
+                        "comment": inner.brief_comment,
+                        "type": inner.enum_type.spelling,
+                        "name": inner.spelling,
+                        "items" : []
+                    }
+                    _tmp["fully_qualified"] = fully_qualified(node.referenced)
+                    _tmp["typedef_type"] = "enum"  
+                    for _depth, n in get_nodes(inner, depth):
+                        if n.kind == clang.cindex.CursorKind.ENUM_CONSTANT_DECL:                        
+                            _tmp["items"].append( { "name"   : n.spelling,
+                                                    "comment": n.brief_comment,
+                                                    "value"  : n.enum_value} )
                 # if node.displayname == "ecs_type_t":
                 #     pp(node.underlying_typedef_type.get_declaration())
 

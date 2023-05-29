@@ -18,8 +18,12 @@ def sub_in_file(filename, oldToNew, defaultMode = 'regex'):
             k,v = pair
             t = defaultMode
 
-        if t == 'plain':
+        if t == 'plain_one':
+            d = d.replace(k, v, 1)
+        elif t == 'plain':
             d = d.replace(k, v)
+        elif t == 'regex_one':
+            d = re.sub(k,v,d, 1)
         else:
             d = re.sub(k,v,d)
 

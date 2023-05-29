@@ -10,6 +10,7 @@ from pprint import pprint
 
 noConstPtr = False
 PRINT_STRUCT = False
+camelCase = True
 
 kernelA = re.compile("([^<]+)[<]*([^>]*)[>]*")
 def get_nim_arraytype( c_type, rename = {} ):
@@ -22,12 +23,11 @@ def get_nim_arraytype( c_type, rename = {} ):
     else:
         return f'array[{count},{get_nim_type( etype, rename )}]'
 
-def get_nim_proctype( c_type, rename = {} ):
+def get_nim_proctype( c_type, rename = {}, isConst=False ):
     #TODO: proper proc type
     mo = re.match( '(.*)\s*\(\*\)\((.*)\)', c_type )
     rtype = mo.group(1)
     inner = mo.group(2)
-    
     out = "proc("
     count = 0
     # print( c_type )
@@ -35,11 +35,13 @@ def get_nim_proctype( c_type, rename = {} ):
         for x in inner.split(","):
             if count > 0:
                 out = out + ','
-            out = out + f'arg_{count}:{get_nim_type(x)}'
+            out = out + f'arg_{count}:{get_nim_type(x,returnType = True)}'
             count += 1
     
     if rtype != "void":
-        out = out + f'):{get_nim_type( rtype )}' + '{.cdecl}'
+        if isConst:
+            rtype = "const " + rtype
+        out = out + f'):{get_nim_type( rtype, returnType=True )}' + '{.cdecl}'
     else:
         out = out + ')' + '{.cdecl}'
     return out
@@ -54,6 +56,9 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
 
     if c_type in ["const void *"]:
         return "ConstPointer"
+
+    if c_type in ["const char *"]:
+        return "ccstring"
 
     if c_type.endswith("const *"):
         isConst = True
@@ -78,8 +83,12 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
         return "pointer"
     if c_type in ["long"]:
         return "clong"
+    if c_type in ["unsigned int"]:
+        return "cuint"
     if c_type in ["unsigned long"]:
         return "culong"
+    if c_type in ["unsigned short"]:
+        return "cushort"
     if c_type in ["short"]:
         return "cshort"
     if c_type in ["int"]:
@@ -98,6 +107,7 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
         return "ptr cdouble"
     if c_type in ["double"]:
         return "cdouble"
+    
     if c_type in ["char *"]:
         if isVar:
             return "cstring"
@@ -129,7 +139,7 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
     c_type = c_type.replace("struct ", "")
 
     if "(*)" in c_type:
-        return get_nim_proctype( c_type, rename )
+        return get_nim_proctype( c_type, rename, isConst )
     # xxxx::yyyy<zzzzz> TODO: MODIFY <map>, [K]
     if "::" in c_type:
         _a, _b = kernelA.findall(c_type)[0]
@@ -153,7 +163,9 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
         # _tmp = _tmp.replace( "struct ", " " )
 
         while _tmp[-1] == "*":
-            _tmp = f"ptr {_tmp[:-1]}"
+            # inner = get_nim_type(_tmp[:-1], rename)
+            inner = _tmp[:-1]
+            _tmp = f"ptr {inner}"
         
         if _b != "":
             # There may be several types
@@ -182,7 +194,10 @@ def get_nim_type( c_type, rename = {}, returnType = False ):
     c_type = c_type.strip()
     if c_type:
         while c_type[-1] == "*":
-            c_type = f"ptr {c_type[:-1]}"
+            # inner = get_nim_type(c_type[:-1],rename)
+            inner = c_type[:-1]
+            inner = get_nim_type(inner, rename)
+            c_type = f"ptr {inner}"
 
 
     if c_type.startswith( "ptr float" ):
@@ -212,7 +227,7 @@ NIM_KEYWORDS = ["addr", "array", "and", "as", "asm", "bind", "block", "break",
                 "yield"]
 
 def clean(txt):
-    txt = txt.replace("const", "")
+    txt = txt.replace("const ", "")
     txt = txt.strip()
     if txt[-2:] == " &":
         txt = txt[:-2]
@@ -302,12 +317,11 @@ def get_constructor(data,rename = {}, _dup={}):
     else:
         #workaround for constant expr default parameters\
         _paramsTest = export_params(data["params"], rename)   
-        # print("constructor", data["class_name"], _paramsTest )
 
         n = len( _paramParts )
         k = 0
         added = False
-        for r in range( n-1, 0, -1 ):
+        for r in range( n-1, -1, -1 ):
             _outputparts = [ part[0] for part in _paramParts[0:r+1]]
             _params = "".join( _outputparts )
             _proc = f'proc new{methodname}*{templateparams}({_params}): {data["class_name"]} {{.constructor,importcpp: "{data["fully_qualified"]}(@)".}}\n'
@@ -316,7 +330,6 @@ def get_constructor(data,rename = {}, _dup={}):
                 _tmp += _proc
                 added = True
             if not _paramParts[r][1]: 
-                # print("END at", _paramParts[r])
                 break
         if added:
             _tmp += get_comment(data)  + "\n"
@@ -416,6 +429,9 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
     _deftype = data["typedef_type"]
     if _deftype == "struct":
         return get_struct( name, data, include, rename )
+
+    if _deftype == "enum":
+        return get_enum( name, data, include, rename )
 
     underlying =  data["underlying"]
     _type = get_nim_type( underlying, rename )
@@ -811,7 +827,9 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, ignorefields 
     _constructors = [i for i in data if i[0] == filename and i[2] == "constructor"]
     _dup = {}
     for i in _constructors:
-        _txt += get_constructor(i[4], rename, _dup)
+        ctorTxt = get_constructor(i[4], rename, _dup)
+        _txt += ctorTxt
+        # print(ctorTxt)
 
     _methods = [i for i in data if i[0] == filename and i[2] == "method"]
     #if "AlphaFunc" in filename:
