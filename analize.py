@@ -4,6 +4,7 @@ import sys
 import clang.cindex
 import string
 import os
+import os.path
 import glob
 import textwrap
 import re
@@ -496,6 +497,11 @@ def export_nim( dest, parsed, output, root = None, ignore={}, ignorefields = [],
 
     _output = output
     os.makedirs( _output, exist_ok = True )
+
+    for file in os.listdir( _output ):
+        fullname = _output + '/' + file
+        if os.path.isfile(fullname) and file.endswith('.nim'):
+            os.remove( fullname )
     #
     #pprint(_filter["/usr/include/osg/Array"])
     #pprint(dependsOn["/usr/include/osg/Array"])
@@ -610,6 +616,7 @@ def export_nim( dest, parsed, output, root = None, ignore={}, ignorefields = [],
     for _file in _destFiles:
         _fname = os.path.splitext(_file)[0]
         if _fname != f"{_dest}_types":
+            _fname = _fname.replace("-", "_")
             data = [(f"{_dest}.nim", None, "import", [_fname])] + data             
 
     # Renaming
@@ -631,6 +638,7 @@ def export_nim( dest, parsed, output, root = None, ignore={}, ignorefields = [],
     for destFile in _destFiles:
         print( "export:", destFile )
         _txt = export_txt( destFile, data, root = _root, rename=rename, ignore = ignore, ignorefields = ignorefields, inheritable=inheritable, varargs = varargs)
+        destFile = destFile.replace("-", "_")
         _fname = os.path.join(_output , destFile)        
         _fp = open(_fname, "w")
         _fp.write( _txt )

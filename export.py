@@ -9,6 +9,7 @@ import re
 from pprint import pprint
 
 noConstPtr = False
+noEnumValue = False
 PRINT_STRUCT = False
 camelCase = True
 
@@ -442,7 +443,7 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
     if _deftype == "function":
         # ActiveTextureProc* = proc (texture: GLenum)
         _return = ""
-        if data["result"] not in ["void", "void *"]:
+        if data["result"] not in ["void"]:
             _result = data["result"].strip()
             # if _result.startswith("const "):
             #     _result = _result[6:]
@@ -479,7 +480,7 @@ def get_typedef(name, data, include = None, rename={}):   # TODO: añadir opció
         return f'  {_name}* {{.{_include}importcpp: "{data["fully_qualified"]}".}} = {_type}\n'
     #_data[_file]["typedefs"].append((i["name"], _type))
 
-def get_class(name, data, include = None, byref = True, rename = {}, inheritable=False):
+def get_class(name, data, include = None, byref = True, rename = {}, inheritable=False, nofield = False):
     #)
     _include = ""
     if include != None:
@@ -516,6 +517,22 @@ def get_class(name, data, include = None, byref = True, rename = {}, inheritable
 
         #_template = f'[{", ".join(data["template_params"])}] '
     _tmp = f'  {_nameClean}*{_template} {{.{_inheritable}{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
+    if not nofield:
+        for f in data["fields"]:
+            if PRINT_STRUCT: print( " ..", f )
+            fname = f["name"]
+            if not fname: continue
+            #TODO: anonymous inner struct
+            if f["type"].startswith("struct "):continue
+            fname = clean( fname )
+            tname = get_nim_type( f["type"], rename )
+            if fname.startswith("_"):
+                continue
+            if fname.endswith("_"):
+                _tmp += f'    {fname[:-1]}* {{.importcpp:"{fname}".}}: {tname}\n'
+            else:
+                _tmp += f'    {fname}* : {tname}\n' 
+
     _tmp += get_comment(data) + "\n"
     return _tmp    
 
@@ -555,12 +572,17 @@ def get_struct(name, data, include = None, rename={}, inheritable = False, nofie
         #_template = f'[{", ".join(data["template_params"])}] '
     """
     #_tmp = f'  {_nameClean}*{_template} {{.{_include}importcpp: "{_name}"{_byref}.}} = object{_inheritance}\n'
+    if data.get("is_union", False):
+        _union = "union, "
+    else:
+        _union = ""
+
     if inheritable :
         _inheritable = "inheritable, "
     else:
         _inheritable = ""
 
-    _tmp = f'  {_nameClean}* {{.{_inheritable}{_include}importcpp: "{_name}".}} = object{_inheritance}\n'
+    _tmp = f'  {_nameClean}* {{.{_inheritable}{_union}{_include}importcpp: "{_name}".}} = object{_inheritance}\n'
     if PRINT_STRUCT:  print( '>>', name )
     if not nofield:
         for f in data["fields"]:
@@ -599,9 +621,12 @@ def get_enum(name, data, include = None, rename = {}):
     _itemsTxt = ""
     _items = data["items"]
     n = len(_items)
+    _items.sort(key = lambda i: i["value"])
+
     for i in range(len(_items)):
         _i = _items[i]
         #print(_i)
+        # _itemsTxt += f'    {_prefix}{_i["name"]}'
         _itemsTxt += f'    {_prefix}{_i["name"]} = {_i["value"]}'            
         if i<n-1:
             _itemsTxt += ","
@@ -706,7 +731,9 @@ def get_template_dependencies(tmp):
 
 def export_txt_option(option={}):
     global noConstPtr
+    global noEnumValue
     noConstPtr = option.get( 'no_const', None )
+    noEnumValue = option.get( 'no_enum_value', None )
 
 def export_txt(filename, data,  root= "/", rename = {}, ignore={}, ignorefields = [], inheritable={}, varargs={}):
     _txt = ""
@@ -745,7 +772,10 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, ignorefields 
     if len(_consts) > 0:
         _txt += "const\n"
     for i in _consts:
+        print(get_const(i))
         _txt += get_const(i)
+
+    # print(_txt)
     if len(_consts) > 0:            
         _txt += "\n\n"
 
@@ -796,11 +826,12 @@ def export_txt(filename, data,  root= "/", rename = {}, ignore={}, ignorefields 
     for _filename, name, values in _classes:
         if ignore and ( name in ignore): continue
         _fname = os.path.relpath( _filename, root )
+        nofield = name in ignorefields
         if name in inheritable:
-            _part = get_class( name, values, _fname, rename = rename, inheritable = True )
+            _part = get_class( name, values, _fname, rename = rename, inheritable = True, nofield = nofield )
             _classesPre.append((name, _part))
         else:
-            _segment += get_class( name, values, _fname, rename = rename)   
+            _segment += get_class( name, values, _fname, rename = rename, nofield = nofield )
 
     _classesPre.sort( key = lambda x: inheritable.index(x[0]) )
     _segmentPre = "".join(x[1] for x in _classesPre)
