@@ -16,7 +16,13 @@ import re
 from pprint import pprint
 from pathlib import Path
 import collections
-
+import concurrent.futures
+import multiprocessing
+import queue
+import threading
+import time
+import logging
+# 
 # Global state
 _visitedEnum = {}
 _visitedStruct = {}
@@ -569,6 +575,8 @@ def _parse_struct(filename, tu):
             continue
         
         struct_name = node.spelling
+
+        if struct_name.startswith("(unnamed"): continue
         
         # Skip if we've already processed a complete definition
         if (not node.is_definition()) and (struct_name in structs):
@@ -653,6 +661,8 @@ def _parse_methods(filename, tu):
             op = name[8:]
             if re.match(r"[\[\]!+\-=*\^/]+", op):
                 name = f"`{op}`"
+            else:
+                continue
         
         method_data = {
             "name": name,
@@ -794,20 +804,23 @@ def parse_include_file(filename, dependsOn, provides, search_paths=None, extra_a
     args += extra_args
     args += [f"-I{path}" for path in search_paths]
     
-    print(args)
+    logging.debug(args)
     
     # Parse options
-    opts = (clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD |
-            clang.cindex.TranslationUnit.PARSE_PRECOMPILED_PREAMBLE |
-            clang.cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES |
-            clang.cindex.TranslationUnit.PARSE_INCOMPLETE)
+    opts = (
+            clang.cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES 
+            # | clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
+            | clang.cindex.TranslationUnit.PARSE_PRECOMPILED_PREAMBLE
+            # | clang.cindex.TranslationUnit.PARSE_INCOMPLETE
+            | clang.cindex.TranslationUnit.PARSE_CACHE_COMPLETION_RESULTS
+            )
     
     # Parse the file
     tu = index.parse(filename, args, None, opts)
     
     # Print diagnostics
     for diag in tu.diagnostics:
-        print(diag)
+        logging.debug(diag)
     
     # Parse typedefs
     typedefs = _parse_typedef(filename, tu, enum_to_const=enum_to_const)
@@ -854,9 +867,12 @@ def parse_include_file(filename, dependsOn, provides, search_paths=None, extra_a
     
     return data, deps, provs, missing
 
+
+# 替换do_parse函数中的worker函数和相关日志设置
 def do_parse(root, folders, dest, search_paths=None, extra_args=None, ignore=None, 
             enum_to_const=None, c_mode=False):
     """Parse multiple include files and save the results."""
+    
     if search_paths is None:
         search_paths = []
     if extra_args is None:
@@ -865,6 +881,16 @@ def do_parse(root, folders, dest, search_paths=None, extra_args=None, ignore=Non
         ignore = []
     if enum_to_const is None:
         enum_to_const = []
+    
+    # 设置日志
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(threadName)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    logger = logging.getLogger(__name__)
     
     # Get the list of files to parse
     files_to_parse = []
@@ -875,7 +901,7 @@ def do_parse(root, folders, dest, search_paths=None, extra_args=None, ignore=Non
         files_to_parse.extend([f for f in all_files if os.path.isfile(f)])
         dirs.extend([d for d in all_files if not os.path.isfile(d)])
     
-    print(f"Root folder: {root}")
+    logger.info(f"Root folder: {root}")
     
     # Create output directories
     path = os.getcwd()
@@ -893,31 +919,83 @@ def do_parse(root, folders, dest, search_paths=None, extra_args=None, ignore=Non
         folder_path = os.path.join(dest, rel_path)
         Path(folder_path).mkdir(parents=True, exist_ok=True)
     
-    # Parse all files
+    # Remove files in ignore list
+    files_to_parse = [f for f in files_to_parse if f not in ignore]
+    total_files = len(files_to_parse)
+    
+    # Shared data structures protected by a lock
+    lock = threading.Lock()
     parsed_data = []
     depends_on = {}
     provides = {}
     missing = {}
     
-    total_files = len(files_to_parse)
-    for i, include_file in enumerate(files_to_parse, 1):
-        if include_file in ignore:
-            continue
-            
-        print(f"Parsing ({i}/{total_files}): {include_file}")
+    # Worker function for thread pool
+    def worker():
+        thread_logger = logging.getLogger(f"{__name__}.worker.{threading.current_thread().name}")
         
-        data, deps, provs, miss = parse_include_file(
-            include_file, depends_on, provides,
-            search_paths=search_paths,
-            extra_args=extra_args,
-            enum_to_const=enum_to_const,
-            c_mode=c_mode
-        )
-        
-        parsed_data.extend(data)
-        depends_on[include_file] = deps
-        provides[include_file] = provs
-        missing[include_file] = miss
+        while True:
+            try:
+                task = task_queue.get(block=False)
+                if task is None:  # Sentinel to stop worker
+                    break
+                    
+                idx, include_file = task
+                thread_logger.info(f"Parsing ({idx}/{total_files}): {include_file}")
+                
+                try:
+                    data, deps, provs, miss = parse_include_file(
+                        include_file,
+                        depends_on, provides,  # Use the shared dictionaries
+                        search_paths=search_paths,
+                        extra_args=extra_args,
+                        enum_to_const=enum_to_const,
+                        c_mode=c_mode
+                    )
+                    
+                    with lock:
+                        parsed_data.extend(data)
+                        depends_on[include_file] = deps
+                        provides[include_file] = provs
+                        missing[include_file] = miss
+                        
+                except Exception as e:
+                    thread_logger.error(f"Error parsing {include_file}: {str(e)}", exc_info=True)
+                
+                task_queue.task_done()
+            except queue.Empty:
+                time.sleep(0.1)  # Small sleep to reduce CPU usage in the polling loop
+    
+    # Create task queue and workers
+    task_queue = queue.Queue()
+    
+    # Determine number of worker threads (use fewer than CPU count to prevent resource contention)
+    # num_workers = 2
+    num_workers = max(1, multiprocessing.cpu_count() // 2)
+    logger.info(f"Using {num_workers} worker threads")
+    
+    # Start worker threads
+    threads = []
+    for i in range(num_workers):
+        t = threading.Thread(target=worker, name=f"Worker-{i+1}")
+        t.daemon = True
+        t.start()
+        threads.append(t)
+    
+    # Add tasks to queue
+    for idx, f in enumerate(files_to_parse, 1):
+        task_queue.put((idx, f))
+    
+    # Wait for all tasks to complete
+    task_queue.join()
+    
+    # Stop workers
+    for _ in range(num_workers):
+        task_queue.put(None)
+    
+    # Wait for all worker threads to finish
+    for t in threads:
+        t.join()
     
     # Save results
     result = {
@@ -929,30 +1007,12 @@ def do_parse(root, folders, dest, search_paths=None, extra_args=None, ignore=Non
     
     import pickle
     pickle_path = os.path.join(delete_folder, 'files.pickle')
+    logger.info(f"Saving results to {pickle_path}")
     with open(pickle_path, 'wb') as fp:
         pickle.dump(result, fp)
 
-class Unbuffered:
-    """Wrapper to unbuffer stdout."""
-    def __init__(self, stream):
-        self.stream = stream
-        
-    def write(self, data):
-        self.stream.write(data)
-        self.stream.flush()
-        
-    def writelines(self, datas):
-        self.stream.writelines(datas)
-        self.stream.flush()
-        
-    def __getattr__(self, attr):
-        return getattr(self.stream, attr)
 
 def main():
-    """Main entry point."""
-    # Unbuffer stdout
-    sys.stdout = Unbuffered(sys.stdout)
-    
     # Parse command line arguments
     if len(sys.argv) < 3:
         print("Usage: parse_headers.py <glob_pattern> <destination>")

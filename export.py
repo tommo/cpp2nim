@@ -82,6 +82,8 @@ def get_nim_type(c_type, rename={}, returnType=False):
 
     if c_type in ["void *"]:
         return "pointer"
+    if c_type in ["_Bool"]:
+        return "bool"
     if c_type in ["long"]:
         return "clong"
     if c_type in ["unsigned int"]:
