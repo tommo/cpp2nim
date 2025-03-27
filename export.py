@@ -26,7 +26,9 @@ def get_nim_arraytype(c_type, rename={}):
         return f'array[{count},{get_nim_type(etype, rename)}]'
 
 def get_nim_proctype(c_type, rename={}, isConst=False):
-    mo = re.match(r'(.*)\s*\(\*\)\((.*)\)', c_type)
+    # print(c_type)
+    mo = re.match(r'(.*)\s*\((.*)\)\*', c_type)
+    # mo = re.match(r'(.*)\s*\(\*\)\((.*)\)\*', c_type)
     rtype = mo.group(1)
     inner = mo.group(2)
     out = "proc("
@@ -45,6 +47,7 @@ def get_nim_proctype(c_type, rename={}, isConst=False):
         out = out + f'):{get_nim_type(rtype, returnType=True)}' + '{.cdecl}'
     else:
         out = out + ')' + '{.cdecl}'
+    # print(" --> ", out)
     return out
 
 def get_nim_type(c_type, rename={}, returnType=False):
@@ -137,7 +140,7 @@ def get_nim_type(c_type, rename={}, returnType=False):
     c_type = c_type.replace("enum ", "")
     c_type = c_type.replace("struct ", "")
 
-    if "(*)" in c_type:
+    if ")*" in c_type:
         return get_nim_proctype(c_type, rename, isConst)
         
     # Handle template types (xxxx::yyyy<zzzzz>)
