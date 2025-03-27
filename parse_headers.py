@@ -316,31 +316,71 @@ class CppAstVisitor:
         self._current_depth = 0
         self._struct_stack = []
     
-    def is_local(self, node):
-        return node.location.file.name == self.filename
+    def can_visit(self, node):
+        if node.location.file.name != self.filename: return False
+        if _visitedEnum.get(node.hash, False): return False
+        return True
 
     def visit_all(self, cursor):
-        for depth, node in get_nodes(cursor):
-            self.visit(node)
+        # Collect nodes by type
+        nodes_by_type = {
+            'typedef': [],
+            'enum': [],
+            'class': [],
+            'struct': [],
+            'constructor': [],
+            'method': [],
+            'function': [],
+            'var': []
+        }
+        
+        for _, node in get_nodes(cursor):
+            if node.kind == clang.cindex.CursorKind.TYPEDEF_DECL:
+                nodes_by_type['typedef'].append(node)
+            elif node.kind == clang.cindex.CursorKind.ENUM_DECL:
+                nodes_by_type['enum'].append(node)
+            elif node.kind == clang.cindex.CursorKind.CLASS_DECL:
+                nodes_by_type['class'].append(node)
+            elif node.kind == clang.cindex.CursorKind.STRUCT_DECL:
+                nodes_by_type['struct'].append(node)
+            elif node.kind == clang.cindex.CursorKind.CONSTRUCTOR:
+                nodes_by_type['constructor'].append(node)
+            elif node.kind == clang.cindex.CursorKind.CXX_METHOD:
+                nodes_by_type['method'].append(node)
+            elif node.kind == clang.cindex.CursorKind.FUNCTION_DECL:
+                nodes_by_type['function'].append(node)
+            elif node.kind == clang.cindex.CursorKind.VAR_DECL:
+                nodes_by_type['var'].append(node)
+        
+        # Visit in specific order
+        for node in nodes_by_type['typedef']:
+            if self.can_visit(node):
+                self.visit_typedefdecl(node)
+        
+        # Visit remaining types
+        for category in ['enum', 'class', 'struct', 'constructor', 'method', 'function', 'var']:
+            for node in nodes_by_type[category]:
+                self.visit(node)
+
 
     def visit(self, node):
         # Dispatch based on node kind
         if node.kind == clang.cindex.CursorKind.ENUM_DECL:
-            if self.is_local(node):  return self.visit_enumdecl(node)
+            if self.can_visit(node):  return self.visit_enumdecl(node)
         elif node.kind == clang.cindex.CursorKind.TYPEDEF_DECL:
-            if self.is_local(node):  return self.visit_typedefdecl(node)
+            if self.can_visit(node): self.visit_typedefdecl(node)
         elif node.kind == clang.cindex.CursorKind.CLASS_DECL:
-            if self.is_local(node):  return self.visit_classdecl(node)
+            if self.can_visit(node):  return self.visit_classdecl(node)
         elif node.kind == clang.cindex.CursorKind.STRUCT_DECL:
-            if self.is_local(node):  return self.visit_structdecl(node)
+            if self.can_visit(node):  return self.visit_structdecl(node)
         elif node.kind == clang.cindex.CursorKind.CONSTRUCTOR:
-            if self.is_local(node):  return self.visit_constructordecldef(node)
+            if self.can_visit(node):  return self.visit_constructordecldef(node)
         elif node.kind == clang.cindex.CursorKind.CXX_METHOD:
-            if self.is_local(node):  return self.visit_cxxmethod(node)
+            if self.can_visit(node):  return self.visit_cxxmethod(node)
         elif node.kind == clang.cindex.CursorKind.FUNCTION_DECL:
-            if self.is_local(node):  return self.visit_functiondecl(node)
+            if self.can_visit(node):  return self.visit_functiondecl(node)
         elif node.kind == clang.cindex.CursorKind.VAR_DECL:
-            if self.is_local(node):  return self.visit_vardecl(node)
+            if self.can_visit(node):  return self.visit_vardecl(node)
         # else:
         #     return self.generic_visit(node)
         
@@ -349,11 +389,6 @@ class CppAstVisitor:
     #         self.visit(child)
         
     def visit_enumdecl(self, node):
-        if (not node.is_definition() or 
-            node.location.file.name != self.filename or
-            _visitedEnum.get(node.hash, False)):
-            return
-            
         is_const = (node.spelling == "" or node.spelling in self.enum_to_const)
         enum_data = {
             "comment": node.brief_comment,
@@ -450,7 +485,6 @@ class CppAstVisitor:
             elif inner.kind == clang.cindex.CursorKind.ENUM_DECL:
                 if node.spelling in self.enum_to_const:
                     return
-                
                 _visitedEnum[inner.hash] = True
                 typedef_data.update({
                     "underlying": node.underlying_typedef_type.spelling,
