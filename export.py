@@ -146,10 +146,9 @@ def get_nim_type(c_type, rename={}, returnType=False):
     if "::" in c_type:
         _a, _b = kernelA.findall(c_type)[0]
         _tmp = _a.split("::")[-1]        
-        
-        for somename in rename.keys():
+        for somename, renamed in rename.items():
             if somename.endswith(_a):
-                _tmp = rename[somename]
+                _tmp = renamed
 
         while _tmp[-1] == "*":
             inner = _tmp[:-1]
@@ -445,6 +444,11 @@ def get_class(name, data, include=None, byref=True, rename={}, inheritable=False
         _inheritance = " of "
         _inheritance += get_nim_type(data["base"][0], rename)   # Nim does not support multiple inheritance
 
+    if name in rename:
+        name = rename[name]
+    else:
+        name = name.split("::")[-1]    
+
     _nameClean = clean(name)
     _name = data["fully_qualified"]
     _template = ""
@@ -487,6 +491,13 @@ def get_struct(name, data, include=None, rename={}, inheritable=False, nofield=F
 
     if name == "":
         return ''
+
+    if name in rename:
+        name = rename[name]
+    else:
+        name = name.split("::")[-1]    
+
+
     _include = ""
     if include != None:
         _include = f'header: "{include}", '
@@ -526,9 +537,10 @@ def get_struct(name, data, include=None, rename={}, inheritable=False, nofield=F
     return _tmp
 
 def get_enum(name, data, include=None, rename={}):
-    _name = name.split("::")[-1]    
     if name in rename:
         _name = rename[name]
+    else:
+        _name = name.split("::")[-1]    
 
     _prefix = ""  # Remove vowels prefix approach was removed
 

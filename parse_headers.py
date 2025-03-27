@@ -153,6 +153,7 @@ def get_template_dependencies(type_name):
     
     return [cleaned]
 
+
 def fully_qualified(cursor):
     """Get fully qualified name of a cursor."""
     if cursor is None:
@@ -164,6 +165,44 @@ def fully_qualified(cursor):
         if parent:
             return parent + '::' + cursor.spelling
     return cursor.spelling
+
+def fully_qualified_type(cursor_type):
+    """Get fully qualified name for a type, handling pointers/arrays/references."""
+    if cursor_type.kind == clang.cindex.TypeKind.POINTER:
+        pointee = cursor_type.get_pointee()
+        return f"{fully_qualified_type(pointee)}*"
+    
+    elif cursor_type.kind == clang.cindex.TypeKind.LVALUEREFERENCE:
+        ref = cursor_type.get_pointee()
+        return f"{fully_qualified_type(ref)}&"
+    
+    elif cursor_type.kind == clang.cindex.TypeKind.CONSTANTARRAY:
+        array_size = cursor_type.get_array_size()
+        element_type = cursor_type.get_array_element_type()
+        return f"{fully_qualified_type(element_type)}[{array_size}]"
+    
+    elif cursor_type.kind == clang.cindex.TypeKind.INCOMPLETEARRAY:
+        element_type = cursor_type.get_array_element_type()
+        return f"{fully_qualified_type(element_type)}[]"
+    
+    elif cursor_type.kind in [
+        clang.cindex.TypeKind.TYPEDEF,
+        clang.cindex.TypeKind.ELABORATED,
+        clang.cindex.TypeKind.RECORD
+    ]:
+        decl = cursor_type.get_declaration()
+        if decl:
+            return fully_qualified(decl)
+    
+    # Handle template specializations
+    elif cursor_type.kind == clang.cindex.TypeKind.UNEXPOSED:
+        # Try to get the canonical type which might be exposed
+        canonical = cursor_type.get_canonical()
+        if canonical != cursor_type:
+            return fully_qualified_type(canonical)
+    
+    return cursor_type.spelling
+    
 
 def fully_qualified_constructor(cursor):
     """Get fully qualified name of a constructor's class."""
@@ -440,13 +479,13 @@ class CppAstVisitor:
                 for subfield in field.type.get_fields():
                     fields.append({
                         "name": subfield.spelling,
-                        "type": subfield.type.spelling
+                        "type": fully_qualified_type(subfield.type)
                     })
                     deps.extend(get_template_dependencies(subfield.type.spelling))
             else:
                 fields.append({
                     "name": field.spelling,
-                    "type": field.type.spelling
+                    "type": fully_qualified_type(field.type)
                 })
                 deps.extend(get_template_dependencies(field.type.spelling))
         
@@ -502,17 +541,17 @@ class CppAstVisitor:
                 for subfield in field.type.get_fields():
                     fields.append({
                         "name": subfield.spelling,
-                        "type": subfield.type.spelling
+                        "type": fully_qualified_type(subfield.type)
                     })
             else:
                 fields.append({
                     "name": field.spelling,
-                    "type": field.type.spelling
+                    "type": fully_qualified_type(field.type)
                 })
         
         class_data["fields"] = fields
         class_data.pop("name")
-        self.data.append(("class", node.spelling, class_data))
+        self.data.append(("class", class_data["fully_qualified"], class_data))
     
     def visit_structdecl(self, node):
         if (_visitedStruct.get(node.hash, False) or
@@ -526,7 +565,8 @@ class CppAstVisitor:
             
         struct_data = self._parse_struct_inner(node)
         if node.type.get_size() >= 0:
-            self.data.append(("struct", node.spelling, struct_data))
+            self.data.append(("struct", struct_data["fully_qualified"], struct_data))
+            # self.data.append(("struct", node.spelling, struct_data))
         _visitedStruct[node.hash] = True
     
     def visit_constructordecldef(self, node):

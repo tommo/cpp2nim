@@ -8,6 +8,17 @@ from .export import *
 
 rootNameSpace = None
 
+def flatten_namespace(name):
+    """Convert NS1::NS2::xx to NS2_xx"""
+    if not name or '::' not in name:
+        return name
+    
+    parts = name.split('::')
+    # Take last two parts if available, otherwise just last part
+    if len(parts) >= 2:
+        return f"{parts[-2]}_{parts[-1]}"
+    return parts[-1]
+
 def _relationships(data, provides, missing):
     """For each file it gives the files providing some dependencies"""
     _new = {}
@@ -208,11 +219,13 @@ def _get_repeated_identifiers(_filter):
 def _get_renames_identifiers(newfilename, data):
     """Generate new names for identifiers that would otherwise conflict"""
     idx = [i for i in range(len(data)) if data[i][0] == newfilename]
+
     enums = [(i, data[i][3], data[i][3].split("::")[-1]) for i in idx if data[i][2] == "enum"]
+
     objects = [(i, data[i][4]["fully_qualified"], data[i][4]["fully_qualified"].split("::")[-1]) 
-               for i in idx if data[i][2] in ["class", "typedef"]]
-               
-    _list = enums + objects
+               for i in idx if data[i][2] in ["class", "struct", "typedef"]]
+
+    _list = objects + objects
     names = [name for _, _, name in _list]
     repeated_names = set([name for name in names if names.count(name) > 1])
 
@@ -238,7 +251,8 @@ def get_new_name(_full, names):
     if rootNameSpace and _tmp[0] == rootNameSpace:
         return '_'.join(_tmp[1:])
     else:
-        return _full.replace("::", "_")
+        return flatten_namespace(_full)  # Modified this line
+        # return _full.replace("::", "_")
 
 def export_nim_option(option):
     global rootNameSpace
@@ -293,6 +307,10 @@ def export_nim(dest, parsed, output, root=None, ignore={}, ignorefields=[], inhe
     
     _idxEnum = [j for j in range(len(data)) if data[j][2] in ["enum"]]
     _enumsFully = [data[j][3] for j in _idxEnum]
+
+    _idxEnumDup = [j for j in range(len(data)) if data[j][2] in ["enum_dup"]]
+    _enumsDup = [data[j][3] for j in _idxEnumDup]
+
     _allTypes = _classesFully + _enumsFully
 
     data = move_to_shared_types(rootTypesFileName, data, root, relations=_relations, force_shared=_allTypes)
@@ -362,11 +380,14 @@ def export_nim(dest, parsed, output, root=None, ignore={}, ignorefields=[], inhe
     # Renaming
     rename2 = rename
     rename = _get_renames_identifiers(rootTypesFileName, data)
-    rename.update(rename2)
- 
+    rename.update({
+        k: flatten_namespace(v) if '::' in v else v 
+        for k, v in rename2.items()
+    })
+
     # EXPORTING TO FILES
     _destFiles = set([i[0] for i in data])
-
+    print(data)
     for destFile in _destFiles:
         print("export:", destFile)
         _txt = export_txt(destFile, data, root=root, rename=rename, ignore=ignore, 
