@@ -78,6 +78,7 @@ def get_nim_type(c_type, rename={}, returnType=False):
     else:
         c_type = c_type[:-1]
 
+
     c_type = c_type.strip()
 
     if c_type in ["void *"]:
@@ -133,9 +134,6 @@ def get_nim_type(c_type, rename={}, returnType=False):
     if c_type in ["char**"]:
         return "cstringArray"
 
-    if isVar:
-        c_type = f"var {c_type}"
-
     c_type = c_type.replace("enum ", "")
     c_type = c_type.replace("struct ", "")
 
@@ -165,6 +163,10 @@ def get_nim_type(c_type, rename={}, returnType=False):
             _b = f"[{_b}]"
         c_type = f"{_tmp}{_b}"
         c_type = get_nim_type(c_type, rename, True)
+        
+        if isVar:
+            c_type = f"var {c_type}"
+
         if returnType and isConst:
             if c_type.startswith("ptr "):
                 return f"ConstPtr[{c_type[4:]}]"
@@ -190,12 +192,18 @@ def get_nim_type(c_type, rename={}, returnType=False):
     if c_type.startswith("ptr Char"):
         c_type = "cstring"
 
+    if c_type.startswith("ptr void"):
+        c_type = "pointer"
+
     if c_type.startswith("ptr ptr void"):
         c_type = "ptr pointer"
 
     if returnType and isConst:
         if c_type.startswith("ptr "):
             return f"ConstPtr[{c_type[4:]}]"
+    
+    if isVar:
+        c_type = f"var {c_type}"
             
     return c_type
 
@@ -233,9 +241,10 @@ def export_params(params, rename={}):
             _params += f'a{n:02d}: '
 
         _type = get_nim_type(p[1], rename)
+
         if len(p) > 2 and not _type.startswith("array"):
-            if p[2] != None:
-                p2 = p[2]
+            p2 = p[2]
+            if p2 != None and not p2.startswith("{"):
                 if _type.endswith("Enum") and p2 != "nil":
                     p2 = _type + "." + p[2]
                 p2 = p2.replace("|", " or ")
@@ -290,10 +299,16 @@ def export_params_for_constructor(params, rename={}):
 def get_constructor(data, rename={}, _dup={}):
     _paramParts = export_params_for_constructor(data["params"], rename)
     _tmp = ""
+    class_type = data["fully_qualified"]
+    if class_type in rename:
+        class_type = rename[class_type]
+    else:
+        class_type = class_type.split("::")[-1]
+
     methodname, templateparams = get_template_parameters(data["name"])
     if len(_paramParts) == 0:
         # no args
-        _tmp = f'proc new{methodname}*{templateparams}(): {data["class_name"]} {{.constructor,importcpp: "{data["fully_qualified"]}".}}\n'
+        _tmp = f'proc new{methodname}*{templateparams}(): {class_type} {{.constructor,importcpp: "{data["fully_qualified"]}".}}\n'
         _tmp += get_comment(data) + "\n"
     else:
         # Workaround for constant expr default parameters
@@ -305,7 +320,7 @@ def get_constructor(data, rename={}, _dup={}):
         for r in range(n-1, -1, -1):
             _outputparts = [part[0] for part in _paramParts[0:r+1]]
             _params = "".join(_outputparts)
-            _proc = f'proc new{methodname}*{templateparams}({_params}): {data["class_name"]} {{.constructor,importcpp: "{data["fully_qualified"]}(@)".}}\n'
+            _proc = f'proc new{methodname}*{templateparams}({_params}): {class_type} {{.constructor,importcpp: "{data["fully_qualified"]}(@)".}}\n'
             if not _dup.get(_proc, None):
                 _dup[_proc] = True
                 _tmp += _proc
@@ -354,6 +369,7 @@ def get_method(data, rename={}, visited=None, varargs={}):
         _result = get_nim_type(_result, rename, True)
         if isRef:
             _result = "var " + _result
+            _importMethod = "importcpp"
         _return = f': {_result}'
 
     # Method name (lowercase the first letter)
@@ -666,7 +682,6 @@ def export_txt(filename, data, root="/", rename={}, ignore={}, ignorefields=[], 
     if len(_consts) > 0:
         _txt += "const\n"
     for i in _consts:
-        print(get_const(i))
         _txt += get_const(i)
 
     if len(_consts) > 0:            

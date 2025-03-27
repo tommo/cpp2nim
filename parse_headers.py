@@ -202,7 +202,7 @@ def fully_qualified_type(cursor_type):
             return fully_qualified_type(canonical)
     
     return cursor_type.spelling
-    
+
 
 def fully_qualified_constructor(cursor):
     """Get fully qualified name of a constructor's class."""
@@ -303,7 +303,8 @@ def get_params_from_node(node):
         if default_value == "NULL":
             default_value = "nil"
         
-        params.append((param_name, param_node.type.spelling, default_value))
+        param_data = (param_name, fully_qualified_type(param_node.type), default_value)
+        params.append(param_data)
     
     return params
 
@@ -502,7 +503,7 @@ class CppAstVisitor:
         
         for child in node.get_children():
             if child.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
-                struct_data["base"].append(child.displayname)
+                struct_data["base"].append(fully_qualified_type(child.type))
         
         return struct_data
     
@@ -525,7 +526,7 @@ class CppAstVisitor:
         
         for child in node.get_children():
             if child.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
-                class_data["base"].append(child.displayname)
+                class_data["base"].append(fully_qualified_type(child.type))
             elif child.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
                 class_data["template_params"].append(child.spelling)
             elif child.kind == clang.cindex.CursorKind.TEMPLATE_NON_TYPE_PARAMETER:

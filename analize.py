@@ -225,7 +225,7 @@ def _get_renames_identifiers(newfilename, data):
     objects = [(i, data[i][4]["fully_qualified"], data[i][4]["fully_qualified"].split("::")[-1]) 
                for i in idx if data[i][2] in ["class", "struct", "typedef"]]
 
-    _list = objects + objects
+    _list = enums + objects
     names = [name for _, _, name in _list]
     repeated_names = set([name for name in names if names.count(name) > 1])
 
@@ -304,6 +304,16 @@ def export_nim(dest, parsed, output, root=None, ignore={}, ignorefields=[], inhe
     # Move shared types to root file
     _idxTypes = [j for j in range(len(data)) if data[j][2] in ["class", "typedef", "struct"]]
     _classesFully = [data[j][4]["fully_qualified"] for j in _idxTypes]
+
+    # Auto-detect inheritable types from base classes
+    for j in _idxTypes:
+        item = data[j]
+        if "base" in item[4] and item[4]["base"]:
+            base_types = item[4]["base"]
+            for base_type in base_types:
+                if base_type in inheritable: continue
+                inheritable.append(base_type)
+
     
     _idxEnum = [j for j in range(len(data)) if data[j][2] in ["enum"]]
     _enumsFully = [data[j][3] for j in _idxEnum]
@@ -384,10 +394,8 @@ def export_nim(dest, parsed, output, root=None, ignore={}, ignorefields=[], inhe
         k: flatten_namespace(v) if '::' in v else v 
         for k, v in rename2.items()
     })
-
     # EXPORTING TO FILES
     _destFiles = set([i[0] for i in data])
-    print(data)
     for destFile in _destFiles:
         print("export:", destFile)
         _txt = export_txt(destFile, data, root=root, rename=rename, ignore=ignore, 
