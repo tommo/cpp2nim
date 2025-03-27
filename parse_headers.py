@@ -1,10 +1,6 @@
 #!/usr/bin/env python
 """
-C++ header parser for generating Nim bindings.
-
-Usage examples:
-  python parse_headers.py "/usr/include/opencascade/gp_*.hxx" occt
-  python parse_headers.py "/usr/include/osg/**/*" osg
+C++ header parser using Visitor pattern
 """
 
 import sys
@@ -22,31 +18,31 @@ import queue
 import threading
 import time
 import logging
-# 
-# Global state
+
+# Global state and constants remain the same
 _visitedEnum = {}
 _visitedStruct = {}
 files = {}
 
-# Nim keywords to avoid name collisions
 NIM_KEYWORDS = ["addr", "and", "as", "asm", "bind", "block", "break",
                 "case", "cast", "concept", "const", "continue", "converter",
                 "defer", "discard", "distinct", "div", "do", "elif", "else",
                 "end", "enum", "except", "export", "finally", "for", "from",
-                "func", "if", "import", "in", "include", "interface", "is",
+                "func", "if", "import", "include", "interface", "is",
                 "isnot", "iterator", "let", "macro", "method", "mixin", "mod",
                 "nil", "not", "notin", "object", "of", "or", "out", "proc", "ptr",
                 "raise", "ref", "return", "shl", "shr", "static", "template",
                 "try", "tuple", "type", "using", "var", "when", "while", "xor",
                 "yield"]
 
-# Common C/C++ types that don't need special handling
 NORMAL_TYPES = ["void", "long", "unsigned long", "int", "size_t", "long long", "long double", 
                 "float", "double", "char", "signed char", "unsigned char", "unsigned short", 
                 "unsigned int", "unsigned long long", "char*", "bool"]
 
 PRINT_STRUCT = False
+MAX_CACHED_FILES = 100
 
+# Utility functions remain unchanged
 def getCodeSpan(cursor):
     """Extract source code text for a given cursor."""
     filename = cursor.location.file.name
@@ -82,7 +78,7 @@ def flatten(L):
         return flatten(L[0]) + flatten(L[1:])
     else:
         return [L[0]] + flatten(L[1:])
-
+        
 def clean(txt):
     """Clean up C++ type names for Nim."""
     txt = txt.strip()
@@ -272,24 +268,53 @@ def get_params_from_node(node):
     
     return params
 
-def _parse_enums(filename, tu, enum_to_const=None):
-    """Extract enum declarations from translation unit."""
-    if enum_to_const is None:
-        enum_to_const = []
-        
-    consts = []
-    repeated = {}
-    enums = {}
+class CppAstVisitor:
+    def __init__(self, filename, enum_to_const=None):
+        self.filename = filename
+        self.enum_to_const = enum_to_const or []
+        self.data = []
+        self._current_depth = 0
+        self._struct_stack = []
     
-    for depth, node in get_nodes(tu.cursor):
-        if (node.kind != clang.cindex.CursorKind.ENUM_DECL or
-            not node.is_definition() or
-            node.location.file.name != filename or
-            _visitedEnum.get(node.hash, False)):
-            continue
-            
-        is_const = (node.spelling == "" or node.spelling in enum_to_const)
+    def is_local(self, node):
+        return node.location.file.name == self.filename
+
+    def visit_all(self, cursor):
+        for depth, node in get_nodes(cursor):
+            self.visit(node)
+
+    def visit(self, node):
+        # Dispatch based on node kind
+        if node.kind == clang.cindex.CursorKind.ENUM_DECL:
+            if self.is_local(node):  return self.visit_enumdecl(node)
+        elif node.kind == clang.cindex.CursorKind.TYPEDEF_DECL:
+            if self.is_local(node):  return self.visit_typedefdecl(node)
+        elif node.kind == clang.cindex.CursorKind.CLASS_DECL:
+            if self.is_local(node):  return self.visit_classdecl(node)
+        elif node.kind == clang.cindex.CursorKind.STRUCT_DECL:
+            if self.is_local(node):  return self.visit_structdecl(node)
+        elif node.kind == clang.cindex.CursorKind.CONSTRUCTOR:
+            if self.is_local(node):  return self.visit_constructordecldef(node)
+        elif node.kind == clang.cindex.CursorKind.CXX_METHOD:
+            if self.is_local(node):  return self.visit_cxxmethod(node)
+        elif node.kind == clang.cindex.CursorKind.FUNCTION_DECL:
+            if self.is_local(node):  return self.visit_functiondecl(node)
+        elif node.kind == clang.cindex.CursorKind.VAR_DECL:
+            if self.is_local(node):  return self.visit_vardecl(node)
+        # else:
+        #     return self.generic_visit(node)
         
+    # def generic_visit(self, node):
+    #     for child in node.get_children():
+    #         self.visit(child)
+        
+    def visit_enumdecl(self, node):
+        if (not node.is_definition() or 
+            node.location.file.name != self.filename or
+            _visitedEnum.get(node.hash, False)):
+            return
+            
+        is_const = (node.spelling == "" or node.spelling in self.enum_to_const)
         enum_data = {
             "comment": node.brief_comment,
             "type": node.enum_type.spelling,
@@ -297,308 +322,217 @@ def _parse_enums(filename, tu, enum_to_const=None):
             "items": []
         }
         
-        for _, enum_const in get_nodes(node, depth):
-            if enum_const.kind == clang.cindex.CursorKind.ENUM_CONSTANT_DECL:
-                enum_data["items"].append({
-                    "name": enum_const.spelling,
-                    "comment": enum_const.brief_comment,
-                    "value": enum_const.enum_value
+        # Collect enum items first
+        items = []
+        for child in node.get_children():
+            if child.kind == clang.cindex.CursorKind.ENUM_CONSTANT_DECL:
+                items.append({
+                    "name": child.spelling,
+                    "comment": child.brief_comment,
+                    "value": child.enum_value
                 })
         
-        if is_const:
-            consts.append(enum_data)
-        else:
-            # Sort enum values
-            values = sorted(set(item["value"] for item in enum_data["items"]))
-            names = [item["name"] for item in enum_data["items"]]
-            
+        # Sort by value if not const
+        if not is_const:
+            values = sorted(set(item["value"] for item in items))
+            names = [item["name"] for item in items]
             new_items = []
+            dup_items = []
+            value2name = {}
             for value in values:
-                for item in enum_data["items"]:
+                for item in items:
                     if item["value"] == value:
                         new_items.append(item)
                         names.remove(item["name"])
+                        value2name[value] = item["name"]
                         break
             
+            # Handle remaining items (duplicate values)
             for name in names:
-                for item in enum_data["items"]:
+                for item in items:
                     if item["name"] == name:
-                        repeated[name] = item
-            
+                        dup_items.append({"name":name, "target":value2name[item["value"]]})
+                        break
             enum_data["items"] = new_items
-            enums[fully_qualified(node.referenced)] = enum_data
-    
-    return consts, enums, repeated
-
-def _parse_typedef(filename, tu, enum_to_const=None):
-    """Extract typedef declarations from translation unit."""
-    if enum_to_const is None:
-        enum_to_const = []
+        else:
+            enum_data["items"] = items
         
-    typedefs = {}
+        if is_const:
+            self.data.append(("const", enum_data))
+        else:
+            self.data.append(("enum", fully_qualified(node.referenced), enum_data))
+            if dup_items: self.data.append(("enum_dup", dup_items))
+        _visitedEnum[node.hash] = True
     
-    for depth, node in get_nodes(tu.cursor):
+    def visit_typedefdecl(self, node):
         if (node.access_specifier in [
                 clang.cindex.AccessSpecifier.PRIVATE,
                 clang.cindex.AccessSpecifier.PROTECTED
-            ] or
-            not (node.location.file and node.location.file.name == filename)):
-            continue
-        
-        if node.kind == clang.cindex.CursorKind.TYPE_REF:
-            ref_kind = node.referenced.kind
-            name = node.referenced.spelling
+            ] or not (node.location.file and node.location.file.name == self.filename)):
+            return
             
-            if ref_kind in [
-                clang.cindex.CursorKind.ENUM_DECL,
-                clang.cindex.CursorKind.TYPEDEF_DECL
-            ]:
+        typedef_data = {
+            "underlying": node.underlying_typedef_type.spelling,
+            "typedef_type": False,
+            "fully_qualified": fully_qualified(node.referenced),
+            "result": node.result_type.spelling
+        }
+        
+        typedef_data["underlying_deps"] = get_template_dependencies(typedef_data["underlying"])
+        typedef_data["params"] = get_params_from_node(node)
+        
+        kind = node.underlying_typedef_type.kind
+        
+        if kind == clang.cindex.TypeKind.POINTER:
+            pointee = node.underlying_typedef_type.get_pointee()
+            if pointee.kind == clang.cindex.TypeKind.FUNCTIONPROTO:
+                typedef_data["result"] = pointee.get_result().spelling
+                typedef_data["typedef_type"] = "function"
+        
+        elif kind == clang.cindex.TypeKind.FUNCTIONPROTO:
+            typedef_data["result"] = node.underlying_typedef_type.get_result().spelling
+            typedef_data["typedef_type"] = "function"
+        
+        else:
+            inner = node.underlying_typedef_type.get_declaration()
+            
+            if inner.kind == clang.cindex.CursorKind.STRUCT_DECL:
+                _visitedStruct[inner.hash] = True
+                typedef_data.update(self._parse_struct_inner(inner))
+                typedef_data["typedef_type"] = "struct"
+            
+            elif inner.kind == clang.cindex.CursorKind.UNION_DECL:
+                _visitedStruct[inner.hash] = True
+                typedef_data.update(self._parse_struct_inner(inner))
+                typedef_data["typedef_type"] = "struct"
+                typedef_data["is_union"] = True
+            
+            elif inner.kind == clang.cindex.CursorKind.ENUM_DECL:
+                if node.spelling in self.enum_to_const:
+                    return
+                
+                _visitedEnum[inner.hash] = True
+                typedef_data.update({
+                    "underlying": node.underlying_typedef_type.spelling,
+                    "comment": inner.brief_comment,
+                    "type": inner.enum_type.spelling,
+                    "name": inner.spelling,
+                    "items": [],
+                    "typedef_type": "enum"
+                })
+                
+                for child in inner.get_children():
+                    if child.kind == clang.cindex.CursorKind.ENUM_CONSTANT_DECL:
+                        typedef_data["items"].append({
+                            "name": child.spelling,
+                            "comment": child.brief_comment,
+                            "value": child.enum_value
+                        })
+        
+        self.data.append(("typedef", node.spelling, typedef_data))
+    
+    def _parse_struct_inner(self, node):
+        fields = []
+        deps = []
+        
+        for field in node.type.get_fields():
+            if field.is_anonymous():
+                for subfield in field.type.get_fields():
+                    fields.append({
+                        "name": subfield.spelling,
+                        "type": subfield.type.spelling
+                    })
+                    deps.extend(get_template_dependencies(subfield.type.spelling))
+            else:
+                fields.append({
+                    "name": field.spelling,
+                    "type": field.type.spelling
+                })
+                deps.extend(get_template_dependencies(field.type.spelling))
+        
+        struct_data = {
+            "name": node.spelling,
+            "comment": node.brief_comment,
+            "base": [],
+            "fully_qualified": fully_qualified(node.referenced),
+            "template_params": [],
+            "underlying_deps": deps,
+            "fields": fields,
+            "incomplete": node.type.get_size() < 0
+        }
+        
+        for child in node.get_children():
+            if child.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
+                struct_data["base"].append(child.displayname)
+        
+        return struct_data
+    
+    def visit_classdecl(self, node):
+        if (node.access_specifier in [
+                clang.cindex.AccessSpecifier.PRIVATE,
+                clang.cindex.AccessSpecifier.PROTECTED
+            ] or not node.is_definition() or
+            node.location.file.name != self.filename):
+            return
+            
+        class_data = {
+            "name": node.spelling,
+            "comment": node.brief_comment,
+            "base": [],
+            "fields": [],
+            "fully_qualified": fully_qualified(node.referenced),
+            "template_params": []
+        }
+        
+        for child in node.get_children():
+            if child.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
+                class_data["base"].append(child.displayname)
+            elif child.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
+                class_data["template_params"].append(child.spelling)
+            elif child.kind == clang.cindex.CursorKind.TEMPLATE_NON_TYPE_PARAMETER:
+                param_info = (child.spelling, child.type.spelling)
+                class_data["template_params"].append(param_info)
+        
+        fields = []
+        for field in node.type.get_fields():
+            if field.access_specifier == clang.cindex.AccessSpecifier.PRIVATE:
                 continue
                 
-            typedef_data = {
-                "underlying": node.displayname,
-                "typedef_type": "ref",
-                "fully_qualified": fully_qualified(node.referenced),
-                "result": node.result_type.spelling
-            }
-            # typedefs[name] = typedef_data
-        
-        elif node.kind == clang.cindex.CursorKind.TYPEDEF_DECL:
-            name = node.displayname
-            
-            typedef_data = {
-                "underlying": node.underlying_typedef_type.spelling,
-                "typedef_type": False,
-                "fully_qualified": fully_qualified(node.referenced),
-                "result": node.result_type.spelling
-            }
-            
-            # Extract underlying dependencies
-            typedef_data["underlying_deps"] = get_template_dependencies(typedef_data["underlying"])
-            
-            # Extract parameters if this is a function typedef
-            typedef_data["params"] = get_params_from_node(node)
-            
-            kind = node.underlying_typedef_type.kind
-            
-            if kind == clang.cindex.TypeKind.POINTER:
-                pointee = node.underlying_typedef_type.get_pointee()
-                if pointee.kind == clang.cindex.TypeKind.FUNCTIONPROTO:
-                    typedef_data["result"] = pointee.get_result().spelling
-                    typedef_data["typedef_type"] = "function"
-            
-            elif kind == clang.cindex.TypeKind.FUNCTIONPROTO:
-                typedef_data["result"] = node.underlying_typedef_type.get_result().spelling
-                typedef_data["typedef_type"] = "function"
-            
+            if field.is_anonymous():
+                for subfield in field.type.get_fields():
+                    fields.append({
+                        "name": subfield.spelling,
+                        "type": subfield.type.spelling
+                    })
             else:
-                inner = node.underlying_typedef_type.get_declaration()
-                
-                if inner.kind == clang.cindex.CursorKind.STRUCT_DECL:
-                    _visitedStruct[inner.hash] = True
-                    typedef_data = _parse_struct_inner(inner, 0)
-                    typedef_data["typedef_type"] = "struct"
-                    typedef_data["fully_qualified"] = fully_qualified(node.referenced)
-                
-                elif inner.kind == clang.cindex.CursorKind.UNION_DECL:
-                    _visitedStruct[inner.hash] = True
-                    typedef_data = _parse_struct_inner(inner, 0)
-                    typedef_data["typedef_type"] = "struct"
-                    typedef_data["fully_qualified"] = fully_qualified(node.referenced)
-                    typedef_data["is_union"] = True
-                
-                elif inner.kind == clang.cindex.CursorKind.ENUM_DECL:
-                    if node.spelling in enum_to_const:
-                        # Let enum body handle this
-                        continue
-                    
-                    _visitedEnum[inner.hash] = True
-                    typedef_data = {
-                        "underlying": node.underlying_typedef_type.spelling,
-                        "comment": inner.brief_comment,
-                        "type": inner.enum_type.spelling,
-                        "name": inner.spelling,
-                        "items": [],
-                        "fully_qualified": fully_qualified(node.referenced),
-                        "typedef_type": "enum"
-                    }
-                    
-                    for _, enum_const in get_nodes(inner, depth):
-                        if enum_const.kind == clang.cindex.CursorKind.ENUM_CONSTANT_DECL:
-                            typedef_data["items"].append({
-                                "name": enum_const.spelling,
-                                "comment": enum_const.brief_comment,
-                                "value": enum_const.enum_value
-                            })
-            
-            typedefs[name] = typedef_data
-    
-    return typedefs
-
-def _parse_class_inner(node, depth):
-    """Parse the internals of a class declaration."""
-    class_data = {
-        "name": node.spelling,
-        "comment": node.brief_comment,
-        "base": [],
-        "fields": [],
-        "fully_qualified": fully_qualified(node.referenced),
-        "template_params": []
-    }
-    
-    # Extract base classes
-    for _, base_node in get_nodes(node, depth):
-        if base_node.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
-            class_data["base"].append(base_node.displayname)
-    
-    # Extract template parameters
-    if node.kind == clang.cindex.CursorKind.CLASS_TEMPLATE:
-        for _, template_param in get_nodes(node, depth):
-            if template_param.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
-                class_data["template_params"].append(template_param.spelling)
-            elif template_param.kind == clang.cindex.CursorKind.TEMPLATE_NON_TYPE_PARAMETER:
-                param_info = (template_param.spelling, template_param.type.spelling)
-                class_data["template_params"].append(param_info)
-            elif template_param.kind in [
-                clang.cindex.CursorKind.CLASS_TEMPLATE,
-                clang.cindex.CursorKind.TYPE_REF
-            ]:
-                pass
-            else:
-                break
-    
-    # Extract fields
-    fields = []
-    for field in node.type.get_fields():
-        if field.access_specifier == clang.cindex.AccessSpecifier.PRIVATE:
-            continue
-            
-        if field.is_anonymous():
-            for subfield in field.type.get_fields():
-                if PRINT_STRUCT:
-                    print(f" []:{subfield.spelling} {subfield.type.spelling}")
                 fields.append({
-                    "name": subfield.spelling,
-                    "type": subfield.type.spelling
+                    "name": field.spelling,
+                    "type": field.type.spelling
                 })
-        else:
-            if PRINT_STRUCT:
-                print(f" {field.spelling} {field.type.spelling}")
-            fields.append({
-                "name": field.spelling,
-                "type": field.type.spelling
-            })
-    
-    class_data["fields"] = fields
-    class_data.pop("name")  # Remove redundant name field
-    
-    return class_data
-
-def _parse_class(filename, tu):
-    """Parse class declarations from translation unit."""
-    classes = {}
-    
-    for depth, node in get_nodes(tu.cursor):
-        if (node.access_specifier in [
-                clang.cindex.AccessSpecifier.PRIVATE,
-                clang.cindex.AccessSpecifier.PROTECTED
-            ] or
-            node.kind not in [
-                clang.cindex.CursorKind.CLASS_DECL,
-                clang.cindex.CursorKind.CLASS_TEMPLATE
-            ] or
-            not node.is_definition() or
-            node.location.file.name != filename):
-            continue
         
-        class_name = node.spelling
-        class_data = _parse_class_inner(node, depth)
-        classes[class_name] = class_data
+        class_data["fields"] = fields
+        class_data.pop("name")
+        self.data.append(("class", node.spelling, class_data))
     
-    return classes
-
-def _parse_struct_inner(node, depth):
-    """Parse the internals of a struct declaration."""
-    fields = []
-    deps = []
-    
-    if PRINT_STRUCT:
-        print(f">>>>>>parse_struct {node.spelling} {node.kind} {node.type.kind}")
-    
-    for field in node.type.get_fields():
-        if field.is_anonymous():
-            for subfield in field.type.get_fields():
-                if PRINT_STRUCT:
-                    print(f" []:{subfield.spelling} {subfield.type.spelling}")
-                fields.append({
-                    "name": subfield.spelling,
-                    "type": subfield.type.spelling
-                })
-                deps.extend(get_template_dependencies(subfield.type.spelling))
-        else:
-            if PRINT_STRUCT:
-                print(f" {field.spelling} {field.type.spelling}")
-            fields.append({
-                "name": field.spelling,
-                "type": field.type.spelling
-            })
-            deps.extend(get_template_dependencies(field.type.spelling))
-    
-    struct_data = {
-        "name": node.spelling,
-        "comment": node.brief_comment,
-        "base": [],
-        "fully_qualified": fully_qualified(node.referenced),
-        "template_params": [],
-        "underlying_deps": deps,
-        "fields": fields,
-        "incomplete": node.type.get_size() < 0
-    }
-    
-    # Extract base classes
-    for _, base_node in get_nodes(node, depth):
-        if base_node.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
-            struct_data["base"].append(base_node.displayname)
-    
-    return struct_data
-
-def _parse_struct(filename, tu):
-    """Parse struct declarations from translation unit."""
-    structs = {}
-    
-    for depth, node in get_nodes(tu.cursor):
+    def visit_structdecl(self, node):
         if (_visitedStruct.get(node.hash, False) or
             node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE or
-            node.kind != clang.cindex.CursorKind.STRUCT_DECL or
             not node.is_definition() or
-            node.location.file.name != filename):
-            continue
-        
-        struct_name = node.spelling
-
-        if struct_name.startswith("(unnamed"): continue
-        
-        # Skip if we've already processed a complete definition
-        if (not node.is_definition()) and (struct_name in structs):
-            continue
-        
-        struct_data = _parse_struct_inner(node, depth)
-        
-        # Only add complete structs
+            node.location.file.name != self.filename):
+            return
+            
+        if node.spelling.startswith("(unnamed"):
+            return
+            
+        struct_data = self._parse_struct_inner(node)
         if node.type.get_size() >= 0:
-            structs[struct_name] = struct_data
+            self.data.append(("struct", node.spelling, struct_data))
+        _visitedStruct[node.hash] = True
     
-    return structs
-
-def _parse_constructors(filename, tu):
-    """Parse constructor declarations from translation unit."""
-    constructors = []
-    
-    for depth, node in get_nodes(tu.cursor):
-        if (node.kind != clang.cindex.CursorKind.CONSTRUCTOR or
-            node.location.file.name != filename):
-            continue
-        
+    def visit_constructordecldef(self, node):
+        if node.location.file.name != self.filename:
+            return
+            
         constructor_data = {
             "name": node.spelling,
             "class_name": node.semantic_parent.spelling,
@@ -607,28 +541,71 @@ def _parse_constructors(filename, tu):
             "params": get_params_from_node(node)
         }
         
-        constructors.append(constructor_data)
+        self.data.append(("constructor", constructor_data["fully_qualified"], constructor_data))
     
-    return constructors
-
-def _parse_methods(filename, tu):
-    """Parse method and function declarations from translation unit."""
-    methods = []
-    
-    # First pass: handle variable declarations that are function pointers
-    for depth, node in get_nodes(tu.cursor):
+    def visit_cxxmethod(self, node):
         if (node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE or
-            node.kind != clang.cindex.CursorKind.VAR_DECL or
-            node.type.kind != clang.cindex.TypeKind.TYPEDEF or
-            node.location.file.name != filename):
-            continue
+            node.location.file.name != self.filename):
+            return
+            
+        name = node.spelling
+        if name.startswith("operator"):
+            op = name[8:]
+            if re.match(r"[\[\]!+\-=*\^/]+", op):
+                name = f"`{op}`"
+            else:
+                return
         
+        method_data = {
+            "name": name,
+            "fully_qualified": fully_qualified(node.referenced),
+            "result": node.result_type.spelling,
+            "class_name": node.semantic_parent.spelling,
+            "const_method": node.is_const_method(),
+            "comment": node.brief_comment,
+            "plain_function": False,
+            "file_origin": node.location.file.name,
+            "params": get_params_from_node(node),
+            "result_deps": get_template_dependencies(node.result_type.spelling)
+        }
+        
+        self.data.append(("method", method_data["fully_qualified"], method_data))
+    
+    def visit_functiondecl(self, node):
+        if node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE:
+            return
+            
+        name = node.spelling
+        if name.startswith("operator"):
+            return
+            
+        method_data = {
+            "name": name,
+            "fully_qualified": fully_qualified(node.referenced),
+            "result": node.result_type.spelling,
+            "class_name": "",
+            "const_method": False,
+            "comment": node.brief_comment,
+            "plain_function": True,
+            "file_origin": node.location.file.name,
+            "params": get_params_from_node(node),
+            "result_deps": get_template_dependencies(node.result_type.spelling)
+        }
+        
+        self.data.append(("method", method_data["fully_qualified"], method_data))
+    
+    def visit_vardecl(self, node):
+        if (node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE or
+            node.type.kind != clang.cindex.TypeKind.TYPEDEF or
+            node.location.file.name != self.filename):
+            return
+            
         vtype_decl = node.type.get_declaration()
         pointee = vtype_decl.underlying_typedef_type.get_pointee()
         
         if pointee.kind != clang.cindex.TypeKind.FUNCTIONPROTO:
-            continue
-        
+            return
+            
         method_data = {
             "name": node.spelling,
             "fully_qualified": fully_qualified(node.referenced),
@@ -639,47 +616,11 @@ def _parse_methods(filename, tu):
             "plain_function": True,
             "file_origin": node.location.file.name,
             "params": get_params_from_node(vtype_decl),
-            "result_deps": get_template_dependencies(pointee.get_result().spelling)
+            "result_deps": get_params_from_node(pointee.get_result().spelling)
         }
         
-        methods.append(method_data)
-    
-    # Second pass: handle methods and functions
-    for depth, node in get_nodes(tu.cursor):
-        if (node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE or
-            node.kind not in [
-                clang.cindex.CursorKind.CXX_METHOD,
-                clang.cindex.CursorKind.FUNCTION_DECL
-            ] or
-            node.location.file.name != filename):
-            continue
-        
-        name = node.spelling
-        
-        # Handle operator overloads
-        if name.startswith("operator"):
-            op = name[8:]
-            if re.match(r"[\[\]!+\-=*\^/]+", op):
-                name = f"`{op}`"
-            else:
-                continue
-        
-        method_data = {
-            "name": name,
-            "fully_qualified": fully_qualified(node.referenced),
-            "result": node.result_type.spelling,
-            "class_name": node.semantic_parent.spelling,
-            "const_method": node.is_const_method(),
-            "comment": node.brief_comment,
-            "plain_function": node.kind == clang.cindex.CursorKind.FUNCTION_DECL,
-            "file_origin": node.location.file.name,
-            "params": get_params_from_node(node),
-            "result_deps": get_template_dependencies(node.result_type.spelling)
-        }
-        
-        methods.append(method_data)
-    
-    return methods
+        self.data.append(("method", method_data["fully_qualified"], method_data))
+
 
 def _find_depends_on(filename, data):
     """Find all dependencies in the file."""
@@ -779,9 +720,10 @@ def _missing_dependencies(filename, data, dependencies, provides):
     
     return missing
 
+
 def parse_include_file(filename, dependsOn, provides, search_paths=None, extra_args=None, 
                       enum_to_const=None, c_mode=False):
-    """Parse a single include file and return its data."""
+    """Parse a single include file using visitor pattern."""
     if search_paths is None:
         search_paths = []
     if extra_args is None:
@@ -789,8 +731,6 @@ def parse_include_file(filename, dependsOn, provides, search_paths=None, extra_a
     if enum_to_const is None:
         enum_to_const = []
         
-    data = []
-    
     # Create Clang index
     index = clang.cindex.Index.create()
     
@@ -804,65 +744,26 @@ def parse_include_file(filename, dependsOn, provides, search_paths=None, extra_a
     args += extra_args
     args += [f"-I{path}" for path in search_paths]
     
-    logging.debug(args)
-    
     # Parse options
     opts = (
             clang.cindex.TranslationUnit.PARSE_SKIP_FUNCTION_BODIES 
-            # | clang.cindex.TranslationUnit.PARSE_DETAILED_PROCESSING_RECORD
             | clang.cindex.TranslationUnit.PARSE_PRECOMPILED_PREAMBLE
-            # | clang.cindex.TranslationUnit.PARSE_INCOMPLETE
             | clang.cindex.TranslationUnit.PARSE_CACHE_COMPLETION_RESULTS
             )
     
     # Parse the file
     tu = index.parse(filename, args, None, opts)
     
-    # Print diagnostics
-    for diag in tu.diagnostics:
-        logging.debug(diag)
+    # Create and run visitor
+    visitor = CppAstVisitor(filename, enum_to_const)
+    visitor.visit_all(tu.cursor)
     
-    # Parse typedefs
-    typedefs = _parse_typedef(filename, tu, enum_to_const=enum_to_const)
-    for key, value in typedefs.items():
-        data.append((filename, "typedef", key, value))
-    
-    # Parse enums
-    consts, enums, repeated = _parse_enums(filename, tu, enum_to_const=enum_to_const)
-    for const in consts:
-        data.append((filename, "const", const))
-    for key, value in enums.items():
-        data.append((filename, "enum", key, value))
-    for key, value in repeated.items():
-        data.append((filename, "repeated", key, value))
-    
-    # Parse classes
-    classes = _parse_class(filename, tu)
-    for key, value in classes.items():
-        data.append((filename, "class", key, value))
-    
-    # Parse structs
-    structs = _parse_struct(filename, tu)
-    for key, value in structs.items():
-        data.append((filename, "struct", key, value))
-    
-    # Parse constructors
-    constructors = _parse_constructors(filename, tu)
-    for constructor in constructors:
-        data.append((filename, "constructor", constructor["fully_qualified"], constructor))
-    
-    # Parse methods
-    methods = _parse_methods(filename, tu)
-    for method in methods:
-        data.append((filename, "method", method["fully_qualified"], method))
+    # Process visitor data into expected format
+    data = [(filename, item[0], *item[1:]) for item in visitor.data]
     
     # Find dependencies
     deps = _find_depends_on(filename, data)
-    
-    # Find provided types
     provs = _find_provided(filename, data, deps)
-    
-    # Find missing dependencies
     missing = _missing_dependencies(filename, data, deps, provs)
     
     return data, deps, provs, missing
@@ -970,8 +871,8 @@ def do_parse(root, folders, dest, search_paths=None, extra_args=None, ignore=Non
     task_queue = queue.Queue()
     
     # Determine number of worker threads (use fewer than CPU count to prevent resource contention)
-    # num_workers = 2
-    num_workers = max(1, multiprocessing.cpu_count() // 2)
+    num_workers = 1
+    # num_workers = max(1, multiprocessing.cpu_count() // 2)
     logger.info(f"Using {num_workers} worker threads")
     
     # Start worker threads
