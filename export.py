@@ -27,8 +27,7 @@ def get_nim_arraytype(c_type, rename={}):
 
 def get_nim_proctype(c_type, rename={}, isConst=False):
     # print(c_type)
-    mo = re.match(r'(.*)\s*\((.*)\)\*', c_type)
-    # mo = re.match(r'(.*)\s*\(\*\)\((.*)\)\*', c_type)
+    mo = re.match(r'(.*)\s*\((.*)\)\s*\*', c_type)
     rtype = mo.group(1)
     inner = mo.group(2)
     out = "proc("
@@ -50,10 +49,13 @@ def get_nim_proctype(c_type, rename={}, isConst=False):
     # print(" --> ", out)
     return out
 
+def normalize_ptr_type(c_type):
+    return re.sub(r'(\w)\*', r'\1 *', c_type.strip())
+
 def get_nim_type(c_type, rename={}, returnType=False):
-    c_type = c_type.strip()
+    c_type = normalize_ptr_type(c_type)
     if c_type.endswith("]"):
-        return get_nim_arraytype(c_type, rename)
+        c_type = get_nim_arraytype(c_type, rename)
 
     isVar = True
     isConst = False
@@ -71,7 +73,7 @@ def get_nim_type(c_type, rename={}, returnType=False):
     if c_type.startswith("class "):
         c_type = c_type[5:].strip()
 
-    if c_type.startswith("const "):
+    while c_type.startswith("const "):
         c_type = c_type[5:].strip()
         isConst = True
         isVar = False
@@ -167,7 +169,7 @@ def get_nim_type(c_type, rename={}, returnType=False):
         c_type = f"{_tmp}{_b}"
         c_type = get_nim_type(c_type, rename, True)
         
-        if isVar:
+        if isVar and not isConst:
             c_type = f"var {c_type}"
 
         if returnType and isConst:
@@ -205,7 +207,7 @@ def get_nim_type(c_type, rename={}, returnType=False):
         if c_type.startswith("ptr "):
             return f"ConstPtr[{c_type[4:]}]"
     
-    if isVar:
+    if isVar and not isConst:
         c_type = f"var {c_type}"
             
     return c_type
@@ -222,10 +224,10 @@ NIM_KEYWORDS = ["addr", "array", "and", "as", "asm", "bind", "block", "break",
                 "yield"]
 
 def clean(txt):
-    txt = txt.replace("const ", "")
-    txt = txt.strip()
-    if txt[-2:] == " &":
-        txt = txt[:-2]
+    # # txt = txt.replace("const ", "")
+    # txt = txt.strip()
+    # if txt[-2:] == " &":
+    #     txt = txt[:-2]
     if txt[0] == "_":
         txt = "v_" + txt[1:]
     if txt in NIM_KEYWORDS:

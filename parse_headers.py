@@ -78,17 +78,6 @@ def flatten(L):
         return flatten(L[0]) + flatten(L[1:])
     else:
         return [L[0]] + flatten(L[1:])
-        
-def clean(txt):
-    """Clean up C++ type names for Nim."""
-    txt = txt.strip()
-    if txt.endswith(" &"):
-        txt = txt[:-2]
-    if txt.startswith("_"):
-        txt = "prefix" + txt[1:]
-    if txt in NIM_KEYWORDS:
-        txt = f"`{txt}`"
-    return txt
 
 def cleanit(tmp):
     """More thorough cleaning of C++ type names."""
@@ -141,17 +130,43 @@ def get_template_dependencies(type_name):
     result = []
     cleaned = cleanit(type_name)
     
-    if cleaned.endswith(">") and "<" in cleaned:
-        # Parse template parameters
-        parts = [p.split('>') for p in cleaned.split('<')]
-        parts = flatten(parts)
-        parts = [p.split(',') for p in parts]
-        parts = flatten(parts)
-        parts = [p.strip() for p in parts if p.strip()]
-        parts = [cleanit(p) for p in parts if not p.isdigit()]
-        return parts
+    # Handle nested templates
+    if '<' in cleaned and cleaned.endswith('>'):
+        # Split into base type and parameters
+        base, params = cleaned.split('<', 1)
+        params = params[:-1]  # Remove trailing '>'
+        
+        # Add base type (e.g., "vector" from "vector<int>")
+        result.append(base.strip())
+        
+        # Parse individual parameters
+        depth = 0
+        current_param = []
+        for c in params:
+            if c == '<':
+                depth += 1
+                current_param.append(c)
+            elif c == '>':
+                depth -= 1
+                current_param.append(c)
+            elif c == ',' and depth == 0:
+                param = ''.join(current_param).strip()
+                if param:  # Skip empty params
+                    result.extend(get_template_dependencies(param))
+                current_param = []
+            else:
+                current_param.append(c)
+        
+        # Add last parameter
+        if current_param:
+            param = ''.join(current_param).strip()
+            if param:
+                result.extend(get_template_dependencies(param))
+    else:
+        # Non-template type
+        result.append(cleaned)
     
-    return [cleaned]
+    return [r for r in result if r and not r.isdigit()]
 
 
 def fully_qualified(cursor):
@@ -167,41 +182,59 @@ def fully_qualified(cursor):
     return cursor.spelling
 
 def fully_qualified_type(cursor_type):
-    """Get fully qualified name for a type, handling pointers/arrays/references."""
+    """Get fully qualified name for a type, preserving templates, const, etc."""
+    const_str = "const " if cursor_type.is_const_qualified() else ""
+    # Handle pointer types
     if cursor_type.kind == clang.cindex.TypeKind.POINTER:
         pointee = cursor_type.get_pointee()
-        return f"{fully_qualified_type(pointee)}*"
-    
+        return f"{fully_qualified_type(pointee)}*{const_str.strip()}"
+
+    # Handle reference types
     elif cursor_type.kind == clang.cindex.TypeKind.LVALUEREFERENCE:
         ref = cursor_type.get_pointee()
-        return f"{fully_qualified_type(ref)}&"
-    
-    elif cursor_type.kind == clang.cindex.TypeKind.CONSTANTARRAY:
-        array_size = cursor_type.get_array_size()
+        return f"{fully_qualified_type(ref)}&{const_str.strip()}"
+
+    # Handle arrays
+    elif cursor_type.kind in [clang.cindex.TypeKind.CONSTANTARRAY, 
+                             clang.cindex.TypeKind.INCOMPLETEARRAY]:
         element_type = cursor_type.get_array_element_type()
-        return f"{fully_qualified_type(element_type)}[{array_size}]"
-    
-    elif cursor_type.kind == clang.cindex.TypeKind.INCOMPLETEARRAY:
-        element_type = cursor_type.get_array_element_type()
-        return f"{fully_qualified_type(element_type)}[]"
-    
+        array_size = ""
+        if cursor_type.kind == clang.cindex.TypeKind.CONSTANTARRAY:
+            array_size = str(cursor_type.get_array_size())
+        return f"{fully_qualified_type(element_type)}[{array_size}]{const_str.strip()}"
+
+    # Handle template specializations
+    elif cursor_type.kind in [clang.cindex.TypeKind.UNEXPOSED]:
+        decl = cursor_type.get_declaration()
+        if decl and decl.kind == clang.cindex.CursorKind.CLASS_TEMPLATE:
+            # Get template arguments
+            template_args = []
+            for i in range(cursor_type.get_num_template_arguments()):
+                arg = cursor_type.get_template_argument_type(i)
+                template_args.append(fully_qualified_type(arg))
+            return f"{const_str}{fully_qualified(decl)}<{', '.join(template_args)}>"
+
+    # Handle regular types
     elif cursor_type.kind in [
         clang.cindex.TypeKind.TYPEDEF,
-        clang.cindex.TypeKind.ELABORATED,
-        clang.cindex.TypeKind.RECORD
+        clang.cindex.TypeKind.RECORD, 
+        clang.cindex.TypeKind.ELABORATED
     ]:
         decl = cursor_type.get_declaration()
         if decl:
-            return fully_qualified(decl)
-    
-    # Handle template specializations
-    elif cursor_type.kind == clang.cindex.TypeKind.UNEXPOSED:
-        # Try to get the canonical type which might be exposed
-        canonical = cursor_type.get_canonical()
-        if canonical != cursor_type:
-            return fully_qualified_type(canonical)
-    
-    return cursor_type.spelling
+            tvar_count = cursor_type.get_num_template_arguments()
+            if tvar_count > 0:
+                # Get template arguments
+                template_args = []
+                for i in range(cursor_type.get_num_template_arguments()):
+                    arg = cursor_type.get_template_argument_type(i)
+                    template_args.append(fully_qualified_type(arg))
+                return f"{const_str}{fully_qualified(decl)}<{', '.join(template_args)}>"
+            else:
+                return const_str + fully_qualified(decl)
+
+    # Fallback to spelling
+    return const_str + cursor_type.spelling
 
 
 def fully_qualified_constructor(cursor):
@@ -317,8 +350,8 @@ class CppAstVisitor:
         self._struct_stack = []
     
     def can_visit(self, node):
+        if not node.location.file: return False
         if node.location.file.name != self.filename: return False
-        if _visitedEnum.get(node.hash, False): return False
         return True
 
     def visit_all(self, cursor):
@@ -354,7 +387,7 @@ class CppAstVisitor:
         
         # Visit in specific order
         for node in nodes_by_type['typedef']:
-            if self.can_visit(node):
+            if node.location.file.name == self.filename:
                 self.visit_typedefdecl(node)
         
         # Visit remaining types
@@ -365,10 +398,10 @@ class CppAstVisitor:
 
     def visit(self, node):
         # Dispatch based on node kind
-        if node.kind == clang.cindex.CursorKind.ENUM_DECL:
-            if self.can_visit(node):  return self.visit_enumdecl(node)
-        elif node.kind == clang.cindex.CursorKind.TYPEDEF_DECL:
+        if node.kind == clang.cindex.CursorKind.TYPEDEF_DECL:
             if self.can_visit(node): self.visit_typedefdecl(node)
+        elif node.kind == clang.cindex.CursorKind.ENUM_DECL:
+            if self.can_visit(node):  return self.visit_enumdecl(node)
         elif node.kind == clang.cindex.CursorKind.CLASS_DECL:
             if self.can_visit(node):  return self.visit_classdecl(node)
         elif node.kind == clang.cindex.CursorKind.STRUCT_DECL:
@@ -389,6 +422,9 @@ class CppAstVisitor:
     #         self.visit(child)
         
     def visit_enumdecl(self, node):
+        if _visitedEnum.get(node.hash, False): return
+        if not node.is_definition(): return
+
         is_const = (node.spelling == "" or node.spelling in self.enum_to_const)
         enum_data = {
             "comment": node.brief_comment,
@@ -396,7 +432,6 @@ class CppAstVisitor:
             "name": node.spelling,
             "items": []
         }
-        
         # Collect enum items first
         items = []
         for child in node.get_children():
@@ -443,7 +478,7 @@ class CppAstVisitor:
         if (node.access_specifier in [
                 clang.cindex.AccessSpecifier.PRIVATE,
                 clang.cindex.AccessSpecifier.PROTECTED
-            ] or not (node.location.file and node.location.file.name == self.filename)):
+            ]):
             return
             
         typedef_data = {
@@ -509,32 +544,45 @@ class CppAstVisitor:
         fields = []
         deps = []
         
+        # Get template parameters if this is a template
+        template_params = []
+        for child in node.get_children():
+            if child.kind == clang.cindex.CursorKind.TEMPLATE_TYPE_PARAMETER:
+                template_params.append(child.spelling)
+            elif child.kind == clang.cindex.CursorKind.TEMPLATE_NON_TYPE_PARAMETER:
+                param_info = (child.spelling, child.type.spelling)
+                template_params.append(param_info)
+        
+        # Process fields
         for field in node.type.get_fields():
             if field.is_anonymous():
                 for subfield in field.type.get_fields():
+                    field_type = fully_qualified_type(subfield.type)
                     fields.append({
                         "name": subfield.spelling,
-                        "type": fully_qualified_type(subfield.type)
+                        "type": field_type
                     })
-                    deps.extend(get_template_dependencies(subfield.type.spelling))
+                    deps.extend(get_template_dependencies(field_type))
             else:
+                field_type = fully_qualified_type(field.type)
                 fields.append({
                     "name": field.spelling,
-                    "type": fully_qualified_type(field.type)
+                    "type": field_type
                 })
-                deps.extend(get_template_dependencies(field.type.spelling))
+                deps.extend(get_template_dependencies(field_type))
         
         struct_data = {
             "name": node.spelling,
             "comment": node.brief_comment,
             "base": [],
             "fully_qualified": fully_qualified(node.referenced),
-            "template_params": [],
+            "template_params": template_params,
             "underlying_deps": deps,
             "fields": fields,
             "incomplete": node.type.get_size() < 0
         }
         
+        # Process base classes
         for child in node.get_children():
             if child.kind == clang.cindex.CursorKind.CXX_BASE_SPECIFIER:
                 struct_data["base"].append(fully_qualified_type(child.type))
@@ -590,13 +638,11 @@ class CppAstVisitor:
     
     def visit_structdecl(self, node):
         if (_visitedStruct.get(node.hash, False) or
-            node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE or
-            not node.is_definition() or
-            node.location.file.name != self.filename):
+            node.access_specifier == clang.cindex.AccessSpecifier.PRIVATE
+            ):
             return
-            
-        if node.spelling.startswith("(unnamed"):
-            return
+        if not node.is_definition(): return
+        if node.spelling.startswith("(unnamed"):  return
             
         struct_data = self._parse_struct_inner(node)
         if node.type.get_size() >= 0:
