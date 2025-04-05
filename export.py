@@ -50,7 +50,9 @@ def get_nim_proctype(c_type, rename={}, isConst=False):
     return out
 
 def normalize_ptr_type(c_type):
-    return re.sub(r'(\w)\*', r'\1 *', c_type.strip())
+    v = re.sub(r'(\w)\*', r'\1 *', c_type.strip())
+    v = re.sub(r'const (const )*', 'const ', v)
+    return v
 
 def get_nim_type(c_type, rename={}, returnType=False):
     c_type = normalize_ptr_type(c_type)
