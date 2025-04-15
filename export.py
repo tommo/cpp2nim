@@ -340,6 +340,10 @@ def get_constructor(data, rename={}, _dup={}):
     return _tmp    
 
 def get_method(data, rename={}, visited=None, varargs={}):
+    # Method name (lowercase the first letter)
+    _methodName = data["name"]
+    _methodName = _methodName[0].lower() + _methodName[1:]
+
     # Parameters
     rawparams = data["params"]
     hasValist = False
@@ -379,9 +383,6 @@ def get_method(data, rename={}, visited=None, varargs={}):
             _importMethod = "importcpp"
         _return = f': {_result}'
 
-    # Method name (lowercase the first letter)
-    _methodName = data["name"]
-    _methodName = _methodName[0].lower() + _methodName[1:]
     
     # Operator case
     _isOperator = False
@@ -509,9 +510,6 @@ def get_class(name, data, include=None, byref=True, rename={}, inheritable=False
     return _tmp    
 
 def get_struct(name, data, include=None, rename={}, inheritable=False, nofield=False):
-    if data["incomplete"]:
-        return ''
-
     if name == "":
         return ''
 
@@ -537,8 +535,9 @@ def get_struct(name, data, include=None, rename={}, inheritable=False, nofield=F
 
     _union = "union, " if data.get("is_union", False) else ""
     _inheritable = "inheritable, " if inheritable else ""
+    _incomplete = "incompleteStruct, " if data["incomplete"] else ""
 
-    _tmp = f'  {_nameClean}* {{.{_inheritable}{_union}{_include}importcpp: "{_name}".}} = object{_inheritance}\n'
+    _tmp = f'  {_nameClean}* {{.{_inheritable}{_union}{_include}{_incomplete}importcpp: "{_name}".}} = object{_inheritance}\n'
     if PRINT_STRUCT: print('>>', name)
     if not nofield:
         for f in data["fields"]:
@@ -776,6 +775,7 @@ def export_txt(filename, data, root="/", rename={}, ignore={}, ignorefields=[], 
     _methods = [i for i in data if i[0] == filename and i[2] == "method"]
     _visited = set()
     for i in _methods:
+        if ignore and (i[4]["name"] in ignore): continue
         _m = get_method(i[4], rename, _visited, varargs)
         if _m:
             _txt += _m

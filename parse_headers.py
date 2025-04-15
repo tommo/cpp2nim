@@ -507,19 +507,21 @@ class CppAstVisitor:
             inner = node.underlying_typedef_type.get_declaration()
             
             if inner.kind == clang.cindex.CursorKind.STRUCT_DECL:
+                if _visitedStruct.get(inner.hash, False): return
                 _visitedStruct[inner.hash] = True
                 typedef_data.update(self._parse_struct_inner(inner))
                 typedef_data["typedef_type"] = "struct"
             
             elif inner.kind == clang.cindex.CursorKind.UNION_DECL:
+                if _visitedStruct.get(inner.hash, False): return
                 _visitedStruct[inner.hash] = True
                 typedef_data.update(self._parse_struct_inner(inner))
                 typedef_data["typedef_type"] = "struct"
                 typedef_data["is_union"] = True
             
             elif inner.kind == clang.cindex.CursorKind.ENUM_DECL:
-                if node.spelling in self.enum_to_const:
-                    return
+                if node.spelling in self.enum_to_const: return
+                if _visitedStruct.get(inner.hash, False): return
                 _visitedEnum[inner.hash] = True
                 typedef_data.update({
                     "underlying": node.underlying_typedef_type.spelling,
@@ -539,7 +541,7 @@ class CppAstVisitor:
                         })
         
         self.data.append(("typedef", node.spelling, typedef_data))
-    
+        
     def _parse_struct_inner(self, node):
         fields = []
         deps = []
