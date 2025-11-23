@@ -425,7 +425,13 @@ class CppAstVisitor:
         if _visitedEnum.get(node.hash, False): return
         if not node.is_definition(): return
 
-        is_const = (node.spelling == "" or node.spelling in self.enum_to_const)
+        is_const = (
+            node.spelling == "" 
+            or node.spelling.startswith("(unnamed") 
+            or node.spelling.startswith("(anonymous")
+            or node.spelling in self.enum_to_const
+            )
+
         enum_data = {
             "comment": node.brief_comment,
             "type": node.enum_type.spelling,
@@ -518,7 +524,7 @@ class CppAstVisitor:
                 typedef_data.update(self._parse_struct_inner(inner))
                 typedef_data["typedef_type"] = "struct"
                 typedef_data["is_union"] = True
-            
+
             elif inner.kind == clang.cindex.CursorKind.ENUM_DECL:
                 if node.spelling in self.enum_to_const: return
                 if _visitedStruct.get(inner.hash, False): return
@@ -541,10 +547,60 @@ class CppAstVisitor:
                         })
         
         self.data.append(("typedef", node.spelling, typedef_data))
+
+    def _collect_anonymous_fields(self, field, deps, has_union_parent=False):
+        """Recursively collect fields from anonymous unions/structs."""
+        collected_fields = []
         
+        if not field.is_anonymous():
+            # Regular field
+            field_type = fully_qualified_type(field.type)
+            collected_fields.append({
+                "name": field.spelling,
+                "type": field_type
+            })
+            deps.extend(get_template_dependencies(field_type))
+            return collected_fields, has_union_parent
+        
+        # Anonymous field - check what type it is
+        field_decl = field.type.get_declaration()
+        
+        if field_decl.kind == clang.cindex.CursorKind.UNION_DECL:
+            # Mark anonymous union as visited to prevent separate processing
+            _visitedStruct[field_decl.hash] = True
+            
+            # Anonymous union - recursively collect from all union members
+            for union_member in field.type.get_fields():
+                member_fields, _ = self._collect_anonymous_fields(union_member, deps, True)
+                collected_fields.extend(member_fields)
+            has_union_parent = True
+                
+        elif field_decl.kind == clang.cindex.CursorKind.STRUCT_DECL:
+            # Mark anonymous struct as visited to prevent separate processing
+            _visitedStruct[field_decl.hash] = True
+            
+            # Anonymous struct - recursively collect from all struct members
+            for struct_member in field.type.get_fields():
+                member_fields, union_found = self._collect_anonymous_fields(struct_member, deps, has_union_parent)
+                collected_fields.extend(member_fields)
+                has_union_parent = has_union_parent or union_found
+                
+        else:
+            # Other anonymous type - treat as regular field with generated name
+            field_type = fully_qualified_type(field.type)
+            collected_fields.append({
+                "name": f"_anonymous_{id(field)}",
+                "type": field_type,
+                "is_anonymous": True
+            })
+            deps.extend(get_template_dependencies(field_type))
+        
+        return collected_fields, has_union_parent
+
     def _parse_struct_inner(self, node):
         fields = []
         deps = []
+        has_anonymous_union = False
         
         # Get template parameters if this is a template
         template_params = []
@@ -555,24 +611,14 @@ class CppAstVisitor:
                 param_info = (child.spelling, child.type.spelling)
                 template_params.append(param_info)
         
-        # Process fields
+        # Process fields using the recursive collector
         for field in node.type.get_fields():
-            if field.is_anonymous():
-                for subfield in field.type.get_fields():
-                    field_type = fully_qualified_type(subfield.type)
-                    fields.append({
-                        "name": subfield.spelling,
-                        "type": field_type
-                    })
-                    deps.extend(get_template_dependencies(field_type))
-            else:
-                field_type = fully_qualified_type(field.type)
-                fields.append({
-                    "name": field.spelling,
-                    "type": field_type
-                })
-                deps.extend(get_template_dependencies(field_type))
+            collected, has_union = self._collect_anonymous_fields(field, deps)
+            fields.extend(collected)
+            has_anonymous_union = has_anonymous_union or has_union
         
+        is_incomplete = node.type.get_size() < 0 or has_anonymous_union
+
         struct_data = {
             "name": node.spelling,
             "comment": node.brief_comment,
@@ -581,7 +627,7 @@ class CppAstVisitor:
             "template_params": template_params,
             "underlying_deps": deps,
             "fields": fields,
-            "incomplete": node.type.get_size() < 0
+            "incomplete": is_incomplete,
         }
         
         # Process base classes
@@ -590,7 +636,7 @@ class CppAstVisitor:
                 struct_data["base"].append(fully_qualified_type(child.type))
         
         return struct_data
-    
+
     def visit_classdecl(self, node):
         if (node.access_specifier in [
                 clang.cindex.AccessSpecifier.PRIVATE,

@@ -518,6 +518,7 @@ def get_struct(name, data, include=None, rename={}, inheritable=False, nofield=F
     else:
         name = name.split("::")[-1]    
 
+     
 
     _include = ""
     if include != None:
@@ -709,10 +710,14 @@ def export_txt(filename, data, root="/", rename={}, ignore={}, ignorefields=[], 
     _segmentPre = ""
 
     # Structs (with inheritance handling)
+    _visitedStructs = set()
+
     _structsPre = []
     _structs = [(i[1], i[3], i[4]) for i in data if i[0] == filename and i[2] == "struct"] 
     for _filename, name, values in _structs:
         if ignore and (name in ignore): continue
+        if name in _visitedStructs: continue
+        _visitedStructs.add(name)
         _fname = os.path.relpath(_filename, root)
         nofield = name in ignorefields
         if name in inheritable:
@@ -752,6 +757,9 @@ def export_txt(filename, data, root="/", rename={}, ignore={}, ignorefields=[], 
     _typedefs = [(i[1], i[3], i[4]) for i in data if i[0] == filename and i[2] == "typedef"] 
     for _filename, name, values in _typedefs:
         if ignore and (name in ignore): continue
+        if name in _visitedStructs: continue
+        
+        _visitedStructs.add(name)
         _fname = os.path.relpath(_filename, root)
         _txt += get_typedef(name, values, _fname, rename=rename)
     
