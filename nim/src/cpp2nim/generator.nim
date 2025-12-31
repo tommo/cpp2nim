@@ -668,7 +668,25 @@ proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
     params = params[0..^2]
 
   var paramsStr = gen.generateParams(params)
-  let className = "ptr " & meth.className
+
+  # Apply rename to class name for self parameter
+  var selfClassName = meth.className
+  # Check for fully qualified rename first (from fullyQualified path)
+  let fullyQualifiedClass = if meth.fullyQualified.len > 0:
+                              meth.fullyQualified.rsplit("::", 1)[0]
+                            else:
+                              ""
+  if fullyQualifiedClass.len > 0 and fullyQualifiedClass in gen.rename:
+    selfClassName = gen.rename[fullyQualifiedClass]
+  elif meth.className in gen.rename:
+    selfClassName = gen.rename[meth.className]
+  else:
+    # Try all rename entries that end with ::className
+    for key, value in gen.rename.pairs:
+      if key.endsWith("::" & meth.className):
+        selfClassName = value
+        break
+  let className = "ptr " & selfClassName
 
   var importMethod: string
   var importName: string

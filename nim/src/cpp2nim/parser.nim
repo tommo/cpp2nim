@@ -136,17 +136,25 @@ proc getFullyQualifiedType(cursorType: CXType): string =
     # For typedefs, don't add template args - the typedef name is already complete
     # e.g., color_rgba_t is a typedef for color_t<float, 4>, but we want just "color_rgba_t"
     let decl = getTypeDeclaration(cursorType)
-    return constStr & getFullyQualifiedName(decl)
+    let name = getFullyQualifiedName(decl)
+    if name.len > 0:
+      return constStr & name
+    # Fallback to type spelling for std library types like std::size_t
+    return constStr & toNimStr(getTypeSpelling(cursorType))
   of CXType_Record, CXType_Elaborated:
     let decl = getTypeDeclaration(cursorType)
     let numArgs = Type_getNumTemplateArguments(cursorType)
+    let declName = getFullyQualifiedName(decl)
     if numArgs > 0:
       var templateArgs: seq[string]
       for i in 0..<numArgs:
         let arg = Type_getTemplateArgumentAsType(cursorType, i.cuint)
         templateArgs.add(getFullyQualifiedType(arg))
-      return constStr & getFullyQualifiedName(decl) & "<" & templateArgs.join(", ") & ">"
-    return constStr & getFullyQualifiedName(decl)
+      return constStr & declName & "<" & templateArgs.join(", ") & ">"
+    # Fallback to spelling if decl name is empty (e.g., std::size_t)
+    if declName.len > 0:
+      return constStr & declName
+    return constStr & toNimStr(getTypeSpelling(cursorType))
   else:
     return constStr & toNimStr(getTypeSpelling(cursorType))
 
@@ -231,7 +239,8 @@ proc getParamsFromNode(node: CXCursor, fileCache: var Table[string, seq[string]]
 
     let params = cast[ptr seq[Parameter]](clientData)
     let paramName = toNimStr(getCursorDisplayName(cursor))
-    let paramType = getFullyQualifiedType(getCursorType(cursor))
+    let cursorType = getCursorType(cursor)
+    let paramType = getFullyQualifiedType(cursorType)
 
     # TODO: Extract default value (complex, requires token parsing)
     params[].add(initParameter(paramName, paramType, none(string)))

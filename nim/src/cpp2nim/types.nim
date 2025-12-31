@@ -19,6 +19,7 @@ const
     "short": "cshort",
     "int": "cint",
     "size_t": "csize_t",
+    "std::size_t": "csize_t",
     "long long": "clonglong",
     "long double": "clongdouble",
     "float": "cfloat",
