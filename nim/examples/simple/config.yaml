@@ -1,0 +1,23 @@
+# Simple example config for cpp2nim
+# Demonstrates basic configuration options
+
+# Output directory for generated Nim bindings
+output_dir: "output"
+
+# Root namespace to strip from type names
+root_namespace: "Graphics"
+
+# Type renames - customize generated type names
+type_renames:
+  Point: "Point2D"
+  Rectangle: "Rect"
+
+# Enable camelCase conversion for identifiers
+camel_case: true
+
+# Additional clang compiler arguments
+extra_args:
+  - "-std=c++11"
+
+# Disable parallel parsing for simple example
+parallel: false

@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "metaData": {
+    "url": "https://github.com/samdmarshall/libclang-nim",
+    "downloadMethod": "git",
+    "vcsRevision": "759bc380b211e5ca389fc4da203cd55321e662ea",
+    "files": [
+      "/clangpkg/Index.nim",
+      "/clangpkg/CXErrorCode.nim",
+      "/clang.nimble",
+      "/clangpkg/CXString.nim",
+      "/clangpkg/CXCompilationDatabase.nim",
+      "/clang.nim",
+      "/clangpkg/FatalErrorHandler.nim",
+      "/clangpkg/BuildSystem.nim",
+      "/clangpkg/Documentation.nim"
+    ],
+    "binaries": [],
+    "specialVersions": [
+      "0.59"
+    ]
+  }
+}

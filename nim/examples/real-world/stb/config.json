@@ -1,0 +1,13 @@
+{
+  "output_dir": "output",
+  "c_mode": true,
+  "camel_case": true,
+  "type_renames": {
+    "stbi_uc": "StbiUc",
+    "stbi_us": "StbiUs"
+  },
+  "ignore_types": [],
+  "extra_args": ["-DSTBI_NO_STDIO=0"],
+  "search_paths": ["."],
+  "parallel": false
+}

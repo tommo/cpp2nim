@@ -1,0 +1,47 @@
+# Advanced example config for cpp2nim
+# Demonstrates complex configuration with multiple files
+
+# Output directory
+output_dir: "output"
+
+# Root namespace to strip
+root_namespace: "Transport"
+
+# Type renames
+type_renames:
+  Vehicle: "VehicleBase"
+  Container: "GenericContainer"
+
+# Types to ignore (not generate bindings for)
+ignore_types:
+  - "std::vector"
+  - "std::string"
+
+# Fields to exclude from generated structs
+ignore_fields:
+  - "internalData"
+
+# Mark base class as inheritable for RootObj
+inheritable_types:
+  - "Vehicle"
+
+# Types that should be in shared_types.nim
+force_shared_types:
+  - "EngineType"
+  - "EngineSpecs"
+
+# Compiler arguments
+extra_args:
+  - "-std=c++17"
+  - "-I."
+
+# Search paths for includes
+search_paths:
+  - "."
+
+# Enable parallel parsing
+parallel: true
+num_workers: 4
+
+# Enable camelCase
+camel_case: true

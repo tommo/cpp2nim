@@ -1,0 +1,35 @@
+Ray Renderer Nim Bindings Example
+=================================
+
+Creating renderer...
+Ray: Creating Reference renderer 256x256
+============================================================================
+Compression  is enabled
+SpatialCache is disabled
+============================================================================
+  Renderer ptr: 5075160576
+  Type: Reference
+  HWRT: false
+
+Creating scene...
+  Camera added
+  Light added
+  Materials added
+  Scene finalized
+  Triangles: 0
+  BVH nodes: 0
+
+Rendering 16 samples...
+  4/16 samples
+  8/16 samples
+  12/16 samples
+  16/16 samples
+Rendered 32 samples
+Pixel data pitch: 256
+
+Render stats:
+  Primary ray gen: 2464 us
+  Primary trace: 0 us
+  Primary shade: 1078 us
+
+Done!

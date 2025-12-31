@@ -1,0 +1,11 @@
+{
+  "output_dir": "output",
+  "root_namespace": "Graphics",
+  "type_renames": {
+    "Point": "Point2D",
+    "Rectangle": "Rect"
+  },
+  "camel_case": true,
+  "extra_args": ["-std=c++11"],
+  "parallel": false
+}

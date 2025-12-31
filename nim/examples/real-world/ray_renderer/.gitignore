@@ -1,0 +1,4 @@
+headers/
+*.tga
+example_bin
+parsed.json

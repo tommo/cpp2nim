@@ -1,0 +1,17 @@
+{
+  "output_dir": "output",
+  "root_namespace": "Transport",
+  "type_renames": {
+    "Vehicle": "VehicleBase",
+    "Container": "GenericContainer"
+  },
+  "ignore_types": ["std::vector", "std::string"],
+  "ignore_fields": ["internalData"],
+  "inheritable_types": ["Vehicle"],
+  "force_shared_types": ["EngineType", "EngineSpecs"],
+  "extra_args": ["-std=c++17", "-I."],
+  "search_paths": ["."],
+  "parallel": true,
+  "num_workers": 4,
+  "camel_case": true
+}

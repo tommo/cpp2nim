@@ -1,0 +1,37 @@
+{
+  "input_files": [
+    "headers/Types.h",
+    "headers/Log.h",
+    "headers/SceneBase.h",
+    "headers/RendererBase.h"
+  ],
+  "search_paths": ["headers"],
+  "extra_args": ["-std=c++17"],
+  "output_dir": "output",
+  "root_namespace": "Ray",
+  "ignore_files": [
+    "internal/*",
+    "VulkanFunctions.h",
+    "Config.h",
+    "Bitmask.h",
+    "Span.h"
+  ],
+  "ignore_types": [
+    "VulkanDevice",
+    "VulkanFunctions",
+    "VkImage",
+    "VkImageView",
+    "VkCommandBuffer",
+    "ID3D12Resource",
+    "ID3D12DescriptorHeap",
+    "ID3D12GraphicsCommandList",
+    "Bitmask",
+    "Span",
+    "remove_all_const"
+  ],
+  "inheritable_types": [
+    "ILog",
+    "RendererBase",
+    "SceneBase"
+  ]
+}

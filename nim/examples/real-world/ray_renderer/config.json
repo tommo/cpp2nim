@@ -1,0 +1,55 @@
+{
+  "input_files": [
+    "headers/Types.h",
+    "headers/Log.h",
+    "headers/SceneBase.h",
+    "headers/RendererBase.h"
+  ],
+  "search_paths": ["headers"],
+  "extra_args": ["-std=c++17"],
+  "output_dir": "output",
+  "root_namespace": "Ray",
+  "ignore_files": [
+    "internal/*",
+    "VulkanFunctions.h",
+    "Config.h",
+    "Bitmask.h",
+    "Span.h"
+  ],
+  "ignore_types": [
+    "VulkanDevice",
+    "VulkanFunctions",
+    "VkImage",
+    "VkImageView",
+    "VkCommandBuffer",
+    "ID3D12Resource",
+    "ID3D12DescriptorHeap",
+    "ID3D12GraphicsCommandList",
+    "Bitmask",
+    "Span",
+    "remove_all_const"
+  ],
+  "inheritable_types": [
+    "ILog",
+    "RendererBase",
+    "SceneBase"
+  ],
+  "type_renames": {
+  },
+  "post_fixes": {
+    "shared_types.nim": [
+      {
+        "pattern": "(alias_dependencies\\*: array\\[16,array\\[4,cint\\]\\])\n",
+        "replacement": "$1\n\n  # Handle types (from DEFINE_HANDLE macro - invisible to libclang)\n  CameraHandle* {.header: \"SceneBase.h\", importcpp: \"Ray::CameraHandle\".} = object\n    index: uint32\n    blk: uint32\n  LightHandle* {.header: \"SceneBase.h\", importcpp: \"Ray::LightHandle\".} = object\n    index: uint32\n    blk: uint32\n  MaterialHandle* {.header: \"SceneBase.h\", importcpp: \"Ray::MaterialHandle\".} = object\n    index: uint32\n    blk: uint32\n  MeshHandle* {.header: \"SceneBase.h\", importcpp: \"Ray::MeshHandle\".} = object\n    index: uint32\n    blk: uint32\n  MeshInstanceHandle* {.header: \"SceneBase.h\", importcpp: \"Ray::MeshInstanceHandle\".} = object\n    index: uint32\n    blk: uint32\n  TextureHandle* {.header: \"SceneBase.h\", importcpp: \"Ray::TextureHandle\".} = object\n    index: uint32\n    blk: uint32\n  ParallelForFunction* = proc(begin_idx, end_idx: cint) {.cdecl.}\n  ConstPtr*[T] = ptr T\n",
+        "mode": "regex"
+      }
+    ],
+    "Types.nim": [
+      {
+        "pattern": "color_t\\*\\[T; N: static cint\\] \\{[^}]+\\} = object\n  color_data_t\\*\\[T; N: static cint\\] \\{[^}]+\\} = object\n",
+        "replacement": "color_t*[T; N: static cint] {.header: \"Types.h\", importcpp: \"Ray::color_t\".} = object\n    v*: array[N, T]\n  color_data_t*[T; N: static cint] {.header: \"Types.h\", importcpp: \"Ray::color_data_t\".} = object\n    `ptr`*: ptr color_t[T, N]\n    pitch*: cint\n  # Type aliases\n  color_rgba_t* = color_t[cfloat, 4]\n  color_rgb_t* = color_t[cfloat, 3]\n  color_rg_t* = color_t[cfloat, 2]\n  color_r_t* = color_t[cfloat, 1]\n  color_rgba8_t* = color_t[uint8, 4]\n  color_rgb8_t* = color_t[uint8, 3]\n  color_rg8_t* = color_t[uint8, 2]\n  color_r8_t* = color_t[uint8, 1]\n  color_data_rgba_t* = color_data_t[cfloat, 4]\n  color_data_rgb_t* = color_data_t[cfloat, 3]\n  color_data_rg_t* = color_data_t[cfloat, 2]\n  color_data_r_t* = color_data_t[cfloat, 1]\n  color_data_rgba8_t* = color_data_t[uint8, 4]\n  color_data_rgb8_t* = color_data_t[uint8, 3]\n  color_data_rg8_t* = color_data_t[uint8, 2]\n  color_data_r8_t* = color_data_t[uint8, 1]\n",
+        "mode": "regex"
+      }
+    ]
+  }
+}

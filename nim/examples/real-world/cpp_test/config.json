@@ -1,0 +1,14 @@
+{
+  "output_dir": "output",
+  "root_namespace": "math",
+  "c_mode": false,
+  "camel_case": true,
+  "type_renames": {
+    "Vec3f": "Vector3f",
+    "Vec3d": "Vector3d",
+    "Vec3i": "Vector3i"
+  },
+  "extra_args": ["-std=c++17"],
+  "search_paths": ["."],
+  "parallel": false
+}
