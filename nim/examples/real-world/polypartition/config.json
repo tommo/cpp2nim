@@ -1,0 +1,16 @@
+{
+  "output_dir": "generated",
+  "cpp_std": "c++17",
+  "include_paths": [
+    "/Users/tommo/prj/dev/lib/polypartition/src"
+  ],
+  "defines": [],
+  "type_renames": {
+    "TPPLPoint": "Point",
+    "TPPLPoly": "Poly",
+    "TPPLPartition": "Partition"
+  },
+  "import_c": false,
+  "opaque_types": [],
+  "post_fixes": {}
+}

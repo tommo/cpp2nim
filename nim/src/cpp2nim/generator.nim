@@ -62,8 +62,10 @@ proc getNimType*(cType: string, rename: Table[string, string] = initTable[string
   ## Convert a C++ type to its Nim equivalent.
   var cType = normalizePtrType(cType)
 
-  # Handle arrays first
-  if cType.endsWith("]"):
+  # Handle C arrays first (but NOT C++ templates like vector<int>)
+  # C arrays: int[10], char[], etc. - have [] without <>
+  # C++ templates: vector<int> - have <> which should NOT be treated as arrays
+  if cType.endsWith("]") and "<" notin cType:
     cType = getNimArrayType(cType, rename)
 
   var isVar = true
@@ -174,7 +176,9 @@ proc getNimType*(cType: string, rename: Table[string, string] = initTable[string
           let paramsStr = nimParams.join(",")
           result = result & "[" & paramsStr & "]"
 
-      cType = getNimType(result, rename, true)
+      # Result is already fully processed (namespace stripped, template converted to [])
+      # Don't recursively call getNimType - that would misinterpret Foo[Bar] as a C array
+      cType = result
 
       if isVar and not isConst:
         cType = "var " & cType

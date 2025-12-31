@@ -137,8 +137,10 @@ proc getNimType*(cType: string, rename: Table[string, string] = initTable[string
   ##   getNimType("std::vector<int>") => "vector[cint]"
   var ct = normalizePtrType(cType)
 
-  # Handle arrays first
-  if ct.endsWith("]"):
+  # Handle C arrays first (but NOT C++ templates like vector<int>)
+  # C arrays: int[10], char[], etc. - have [] without <>
+  # C++ templates: vector<int> - have <> which should NOT be treated as arrays
+  if ct.endsWith("]") and "<" notin ct:
     ct = getNimArrayType(ct, rename)
 
   var isVar = true
