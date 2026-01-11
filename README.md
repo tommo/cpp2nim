@@ -1,58 +1,233 @@
 # cpp2nim
-Used to make easier the creation of bindings to C++ projects (Warning - far from complete but might be useful)
 
+A clang-based C++ to Nim binding generator. Parses C++ headers using libclang and generates Nim FFI bindings with proper `{.importcpp.}` pragmas.
 
+> **Note**: This tool generates bindings that will likely need manual adjustments, but should get you much closer to working code than starting from scratch.
 
-# How to use it
-It works in two stages:
-## Parsing
-This is the slowest step. This is done as follows:
+## Installation
 
-- Process a whole folder: the following example will look for all the files within `/usr/include/opencascade`. 
-```
-python parse_headers.py "/usr/include/opencascade/*.hxx" occt
-```
-- Process some of the files: the following will do the same for the files meeting the glob: `gp_*.hxx`. This is useful for very big libraries like OpenCascade (>8000 header files).
-```
-python parse_headers.py "/usr/include/opencascade/gp_*.hxx" occt
-```
-- One file: the following will also work
-```
-python parse_headers.py "/usr/include/opencascade/gp_Pnt.hxx" occt
+```bash
+cd nim
+nimble install
 ```
 
-And for OpenSceneGraph:
+Requires libclang to be installed:
+- **macOS**: `brew install llvm` or use Xcode's clang
+- **Linux**: `apt install libclang-dev` or equivalent
+
+Set `CPP2NIM_LIBCLANG_PATH` environment variable if libclang is not auto-detected.
+
+## Quick Start
+
+```bash
+# Generate bindings for a single header
+cpp2nim all -o bindings/ mylib.h
+
+# Generate bindings with a config file
+cpp2nim all --config=cpp2nim.json "src/*.hpp"
+
+# Process multiple files with options
+cpp2nim all -I/usr/include -o bindings/ --namespace=MyLib "include/*.h"
 ```
-$ python parse_headers.py "/usr/include/osg/*" osg
-$ python parse_headers.py "/usr/include/osgViewer/**/*" osg
+
+## Commands
+
+| Command | Description |
+|---------|-------------|
+| `parse` | Parse C++ headers to intermediate JSON |
+| `analyze` | Analyze dependencies between parsed headers |
+| `generate` | Generate Nim bindings from parsed JSON |
+| `all` | Run complete pipeline (parse + analyze + generate) |
+
+## CLI Options
+
+```
+-c, --config=FILE     Load configuration from JSON file
+-o, --output=DIR      Output directory (default: current dir)
+-I, --include=PATH    Add include search path (can be repeated)
+-D, --define=MACRO    Add preprocessor define (can be repeated)
+-v, --verbose         Enable verbose output
+-q, --quiet           Suppress non-error output
+--c-mode              Parse as C instead of C++
+--no-camel            Disable camelCase conversion
+--namespace=NS        Root namespace to strip
+--rename=OLD:NEW      Add type rename (can be repeated)
+--ignore-type=TYPE    Ignore type (can be repeated)
+--ignore-file=FILE    Ignore file pattern (can be repeated)
+--parallel            Enable parallel parsing
+--workers=N           Number of parallel workers
 ```
 
-> Provided that those libraries are installed on your system. (only tested on linux)
+## Configuration File
 
-The execution will create the folder writen in the second parameter (`occt` or `osg` in the prior examples). Within them the file `deleteme/files.pickle` will be created with the result from the parsing. It should be easy to export it to `yaml` or `json` and process it directly with nim.
+Create a `cpp2nim.json` for project-specific settings:
 
-## Bindings generation
-To create the bindings, you just need to do something like:
+```json
+{
+  "output_dir": "bindings",
+  "root_namespace": "MyLib",
+  "search_paths": ["/usr/include", "./include"],
+  "extra_args": ["-std=c++17"],
+  "defines": ["MY_DEFINE=1"],
+  "camel_case": true,
+  "type_renames": {
+    "OldType": "NewType",
+    "std::vector": "Vector"
+  },
+  "ignore_types": ["std::allocator", "std::string"],
+  "ignore_fields": ["_internal", "_reserved"],
+  "inheritable_types": ["BaseClass"],
+  "force_shared_types": ["SharedEnum"],
+  "c_mode": false,
+  "parallel": true,
+  "num_workers": 4
+}
 ```
-$ python analyse.py osg
+
+### Configuration Options
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `output_dir` | string | Directory for generated .nim files |
+| `root_namespace` | string | C++ namespace to strip from names |
+| `search_paths` | array | Include directories for clang |
+| `extra_args` | array | Additional clang arguments (e.g., `-std=c++17`) |
+| `defines` | array | Preprocessor defines |
+| `c_mode` | bool | Parse as C instead of C++ |
+| `camel_case` | bool | Convert identifiers to camelCase |
+| `type_renames` | object | Map of type name replacements |
+| `ignore_types` | array | Types to skip during generation |
+| `ignore_fields` | array | Fields to exclude from structs |
+| `ignore_files` | array | File patterns to skip |
+| `inheritable_types` | array | Types to mark as `RootObj` for inheritance |
+| `force_shared_types` | array | Types to always put in shared_types.nim |
+| `parallel` | bool | Enable parallel header parsing |
+| `num_workers` | int | Number of parallel workers |
+| `post_fixes` | object | Regex post-processing rules per file |
+
+## Pipeline Stages
+
+### 1. Parse
+Extracts declarations from C++ headers using libclang:
+- Enums and enum classes
+- Structs and classes (public members)
+- Methods and free functions
+- Constructors
+- Typedefs and type aliases
+- Constants
+
+### 2. Analyze
+Resolves dependencies between headers:
+- Identifies shared types (used by multiple files)
+- Detects inheritance relationships
+- Generates import graph
+- Handles type renames for conflicts
+
+### 3. Generate
+Produces Nim code with:
+- Type definitions with `{.importcpp.}` pragmas
+- Method bindings with proper calling conventions
+- `shared_types.nim` for cross-file types
+- Automatic imports between modules
+
+## Examples
+
+See the `nim/examples/` directory:
+
+- **simple/** - Basic enum, struct, and method binding
+- **advanced/** - Multi-file with inheritance and templates
+- **real-world/** - Bindings for actual libraries (stb_image, RVO2, im3d, etc.)
+
+### Simple Example
+
+Input (`input.h`):
+```cpp
+namespace Graphics {
+    enum Color { Red, Green, Blue };
+
+    struct Point {
+        float x, y;
+        float distance(Point other);
+    };
+}
 ```
-This will:
-1. Read the file `osg/deleteme/files.pickle`
-2. Create a `<header>.nim` file per header.
-3. Create a `osg_types.nim` file with shared types across different headers.
-4. Create a `osg.nim` which imports all the other headers.
 
-# Conclusion
-The result most likel won't work, but hopefully will get you closer to the result. 
+Config (`cpp2nim.json`):
+```json
+{
+  "output_dir": "output",
+  "root_namespace": "Graphics",
+  "type_renames": { "Point": "Vec2" }
+}
+```
 
-I recommend to adapt it to your own needs. 
+Generated (`input.nim`):
+```nim
+type
+  Color* {.size: sizeof(cint), header: "input.h",
+          importcpp: "Graphics::Color", pure.} = enum
+    Red = 0, Green = 1, Blue = 2
 
-I hope somebody make something better than this. ;oP
+  Vec2* {.header: "input.h", importcpp: "Graphics::Point".} = object
+    x*: cfloat
+    y*: cfloat
 
-# ToDo
-- There is a lot of missing stuff. 
-- Spaguetty code
-- PassL, PassC
-- I don't know C++ (just the very basic)
+proc distance*(self: ptr Vec2, other: Vec2): cfloat
+    {.importcpp: "#.distance(@)", header: "input.h".}
+```
 
+## Post-Processing
 
+For complex cases, use regex-based post-processing:
+
+```json
+{
+  "post_fixes": {
+    "shared_types.nim": [
+      {
+        "pattern": "OldPattern",
+        "replacement": "NewReplacement",
+        "mode": "regex"
+      }
+    ],
+    "*.nim": [
+      {
+        "pattern": "foo",
+        "replacement": "bar",
+        "mode": "plain"
+      }
+    ]
+  }
+}
+```
+
+Modes: `regex`, `plain`, `regex_one`, `plain_one`
+
+## Known Limitations
+
+- Forward-declared types may need manual stub definitions
+- Nested template typedefs can generate incorrectly
+- Template-heavy code may need manual adjustments
+- Operator overloading has limited support
+
+See `nim/docs/known_issues.md` for details.
+
+## Architecture
+
+```
+C++ Headers → [Parse] → JSON → [Analyze] → [Generate] → Nim Bindings
+                ↓                  ↓              ↓
+            libclang         Dependency      {.importcpp.}
+           AST traversal      resolution       pragmas
+```
+
+Key modules in `nim/src/cpp2nim/`:
+- `parser.nim` - libclang-based C++ parsing
+- `analyzer.nim` - Dependency analysis
+- `generator.nim` - Nim code generation
+- `types.nim` - C++ to Nim type mapping
+- `config.nim` - Configuration management
+
+## License
+
+MIT
