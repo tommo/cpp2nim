@@ -1,0 +1,50 @@
+{
+  "output_dir": "output",
+  "root_namespace": "ldtk",
+  "search_paths": ["upstream/include"],
+  "camel_case": true,
+  "extra_args": ["-std=c++11"],
+  "type_renames": {},
+  "ignore_types": ["std::vector", "std::string", "std::optional", "std::map"],
+  "ignore_fields": [],
+  "post_fixes": {
+    "shared_types.nim": [
+      {
+        "pattern": "ConstPtr*[T] = ptr T  ## const T* return type\n\ntype\n  Layer*",
+        "replacement": "ConstPtr*[T] = ptr T  ## const T* return type\n\n  # Forward declarations / Base types\n  FieldsContainer* {.header: \"FieldsContainer.hpp\", importcpp: \"ldtk::FieldsContainer\", inheritable, byref.} = object\n  TagsContainer* {.header: \"TagsContainer.hpp\", importcpp: \"ldtk::TagsContainer\", inheritable, byref.} = object\n\n  # Generic types (must be defined before instantiations)\n  Point*[T] {.header: \"DataTypes.hpp\", importcpp: \"ldtk::Point\".} = object\n    x*: T\n    y*: T\n  Rect*[T] {.header: \"DataTypes.hpp\", importcpp: \"ldtk::Rect\".} = object\n    x*: T\n    y*: T\n    width*: T\n    height*: T\n  IID* {.header: \"DataTypes.hpp\", importcpp: \"ldtk::IID\".} = object\n    m_iid*: cstring\n  Project* {.header: \"Project.hpp\", importcpp: \"ldtk::Project\", byref.} = object\n    iid*: IID\n\ntype\n  Layer*",
+        "mode": "plain"
+      },
+      {
+        "pattern": "  TileRect* {.header: \"DataTypes.hpp\", importcpp: \"ldtk::TileRect\".} = object\n    bounds*: IntRect\n    m_tileset*: ptr Tileset\n  IID* {.header: \"DataTypes.hpp\", importcpp: \"ldtk::IID\".} = object\n    m_iid*: cstring\n  EntityRef*",
+        "replacement": "  TileRect* {.header: \"DataTypes.hpp\", importcpp: \"ldtk::TileRect\".} = object\n    bounds*: IntRect\n    m_tileset*: ptr Tileset\n  EntityRef*",
+        "mode": "plain"
+      }
+    ],
+    "DataTypes.nim": [
+      {
+        "pattern": "  Point*[T] {.header: \"DataTypes.hpp\", incompleteStruct, importcpp: \"ldtk::Point\".} = object\n  Rect*[T] {.header: \"DataTypes.hpp\", incompleteStruct, importcpp: \"ldtk::Rect\".} = object\n  ",
+        "replacement": "  ",
+        "mode": "plain"
+      },
+      {
+        "pattern": "  IID* {.header: \"DataTypes.hpp\", importcpp: \"ldtk::IID\".} = object\n    m_iid*: cstring\n  ",
+        "replacement": "  ",
+        "mode": "plain"
+      }
+    ],
+    "Project.nim": [
+      {
+        "pattern": "type\n  Project* {.header: \"Project.hpp\", importcpp: \"ldtk::Project\", byref.} = object\n    iid*: IID\n\n",
+        "replacement": "",
+        "mode": "plain"
+      }
+    ],
+    "Tile.nim": [
+      {
+        "pattern": "array[Vertex,4]",
+        "replacement": "array[4, Vertex]",
+        "mode": "plain"
+      }
+    ]
+  }
+}

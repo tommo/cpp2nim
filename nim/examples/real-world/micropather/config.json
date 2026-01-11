@@ -1,0 +1,9 @@
+{
+  "output_dir": "output",
+  "root_namespace": "micropather",
+  "camel_case": true,
+  "extra_args": ["-std=c++11"],
+  "type_renames": {},
+  "ignore_types": [],
+  "ignore_fields": []
+}
