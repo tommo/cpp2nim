@@ -41,6 +41,26 @@ const BasicTypeMap* = {
   "uint16_t": "uint16",
   "uint32_t": "uint32",
   "uint64_t": "uint64",
+  "uintptr_t": "uint",  # pointer-sized unsigned int
+  "intptr_t": "int",    # pointer-sized signed int
+  # std:: prefixed stdint types
+  "std::int8_t": "int8",
+  "std::int16_t": "int16",
+  "std::int32_t": "int32",
+  "std::int64_t": "int64",
+  "std::uint8_t": "uint8",
+  "std::uint16_t": "uint16",
+  "std::uint32_t": "uint32",
+  "std::uint64_t": "uint64",
+  "std::size_t": "csize_t",
+  "std::ptrdiff_t": "int",
+  # unsigned types
+  "unsigned int": "cuint",
+  "unsigned char": "cuchar",
+  "unsigned short": "cushort",
+  "unsigned long": "culong",
+  "unsigned long long": "culonglong",
+  "signed char": "cschar",
 }.toTable
 
 let templatePattern = re"([^<]+)[<]*([^>]*)[>]*"
@@ -77,10 +97,15 @@ proc getNimType*(cType: string, rename: Table[string, string] = initTable[string
   if cType == "const char *":
     return "ccstring"
 
-  # Handle trailing const pointer
+  # Handle trailing const pointer (const *)
   if cType.endsWith("const *"):
     isConst = true
     cType = cType[0..^8] & "*"
+
+  # Handle const pointer (*const) - pointer itself is const, points to non-const
+  # e.g., "Level *const" -> "ptr Level"
+  if cType.endsWith(" *const") or cType.endsWith("*const"):
+    cType = cType.replace(" *const", " *").replace("*const", "*")
 
   # Strip class prefix
   if cType.startsWith("class "):
@@ -141,6 +166,8 @@ proc getNimType*(cType: string, rename: Table[string, string] = initTable[string
         return "pointer"
       if baseName == "string_view":
         return "cstring"
+      if baseName == "string" or baseName == "basic_string":
+        return "cstring"
       if baseName == "pair":
         return "pointer"  # std::pair simplified to pointer
       let templateParams = matches[1]
@@ -198,11 +225,28 @@ proc getNimType*(cType: string, rename: Table[string, string] = initTable[string
     return "pointer"
   if cType == "string_view" or cType == "std::string_view":
     return "cstring"
+  # Handle std::string and basic_string
+  if cType == "string" or cType == "std::string":
+    return "cstring"
+  if cType.startsWith("basic_string") or cType.startsWith("std::basic_string"):
+    return "cstring"
 
-  # Handle simple templates
+  # Handle simple templates (no namespace prefix)
   if "<" in cType and ">" in cType:
-    cType = cType.replace("<", "[")
-    cType = cType.replace(">", "]")
+    let ltPos = cType.find('<')
+    let gtPos = cType.rfind('>')
+    if ltPos > 0 and gtPos > ltPos:
+      let baseName = cType[0..<ltPos].strip()
+      let templateParams = cType[ltPos+1..<gtPos]
+      var nimParams: seq[string]
+      for p in templateParams.split(","):
+        let stripped = p.strip()
+        if stripped.len > 0:
+          nimParams.add(getNimType(stripped, rename))
+      if nimParams.len > 0:
+        cType = baseName & "[" & nimParams.join(",") & "]"
+      else:
+        cType = baseName
 
   cType = cType.strip()
 
@@ -649,6 +693,21 @@ proc generateConstructor*(gen: NimCodeGenerator, ctor: ConstructorDecl,
       result.add(formatComment(ctor.comment) & "\n")
 
 
+proc detectTemplateParams(signature: string): seq[string] =
+  ## Detect single-letter template parameters (T, U, V, etc.) in a type signature.
+  ## Returns list of template params found.
+  var found: HashSet[string]
+  # Common template parameter names
+  const templateParamNames = ["T", "U", "V", "K", "N", "M", "S", "R", "E", "A", "B", "C", "D"]
+  for param in templateParamNames:
+    # Look for standalone param: " T", ": T", "[T", ",T", "<T" or just "T" at word boundaries
+    if (" " & param) in signature or (":" & param) in signature or
+       ("[" & param) in signature or ("," & param) in signature or
+       (signature == param) or signature.endsWith(" " & param) or
+       signature.endsWith(":" & param):
+      found.incl(param)
+  result = found.toSeq.sorted
+
 proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
                      visited: var HashSet[string], varargs: seq[string] = @[]): string =
   ## Generate Nim method/proc declaration.
@@ -739,17 +798,24 @@ proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
 
   methodName = cleanIdentifier(methodName)
 
+  # Detect template parameters from the signature
+  let fullSig = paramsStr & " " & returnStr
+  let templateParams = detectTemplateParams(fullSig)
+  var templateStr = ""
+  if templateParams.len > 0:
+    templateStr = "[" & templateParams.join(", ") & "]"
+
   # Generate proc
   var p: string
   if isOperator and methodName in ["`=`"]:
-    p = "proc assign*(" & paramsStr & ") {." & importMethod & ": \"" & importName & "\"" & pragmas & ".}\n"
+    p = "proc assign*" & templateStr & "(" & paramsStr & ") {." & importMethod & ": \"" & importName & "\"" & pragmas & ".}\n"
   elif isOperator and methodName in ["`[]`"]:
     importName = "#[#]"
-    p = "proc " & methodName & "*(" & paramsStr & ")" & returnStr & " {." & importMethod & ": \"" & importName & "\"" & pragmas & ".}\n"
+    p = "proc " & methodName & "*" & templateStr & "(" & paramsStr & ")" & returnStr & " {." & importMethod & ": \"" & importName & "\"" & pragmas & ".}\n"
   elif isOperator and methodName in ["`()`"]:
     return ""  # Skip function call operator
   else:
-    p = "proc " & methodName & "*(" & paramsStr & ")" & returnStr & " {." & importMethod & ": \"" & importName & "\"" & pragmas & ".}\n"
+    p = "proc " & methodName & "*" & templateStr & "(" & paramsStr & ")" & returnStr & " {." & importMethod & ": \"" & importName & "\"" & pragmas & ".}\n"
 
   if p in visited:
     return ""
@@ -765,11 +831,25 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
   if typedef.typedefKind.isSome:
     if typedef.typedefKind.get == "struct" and typedef.structData.isSome:
       var structData = typedef.structData.get
-      # For anonymous typedef structs, use the typedef name
-      if structData.name.len == 0:
+      # For template type aliases (e.g., using IntPoint = Point<int>),
+      # the struct_data is incomplete - generate a type alias instead
+      if structData.isIncomplete and "<" in typedef.underlying:
+        # This is a template instantiation alias - generate type alias
+        # IMPORTANT: Don't use gen.rename here to avoid self-reference
+        # (the rename table maps Point[int] -> IntPoint, which would cause IntPoint = IntPoint)
+        let underlying = typedef.underlying
+        let nimType = getNimType(underlying, initTable[string, string]())  # No renames!
+        let includePragma = if incl.len > 0: "header: \"" & incl & "\", " else: ""
+        let name = cleanIdentifier(typedef.name)
+        return "  " & name & "* {." & includePragma & "importcpp: \"" & typedef.fullyQualified & "\".} = " & nimType & "\n"
+      elif structData.name.len == 0:
+        # For anonymous typedef structs, use the typedef name
         structData.name = typedef.name
         structData.fullyQualified = typedef.fullyQualified
-      return gen.generateStruct(structData, incl)
+        return gen.generateStruct(structData, incl)
+      else:
+        # Regular struct typedef
+        return gen.generateStruct(structData, incl)
 
     if typedef.typedefKind.get == "enum" and typedef.enumData.isSome:
       return gen.generateEnum(typedef.enumData.get, incl)

@@ -674,7 +674,8 @@ proc visitAll(v: var CppAstVisitor, cursor: CXCursor) =
   proc collectNodesVisitor(cursor, parent: CXCursor, clientData: CXClientData): CXChildVisitResult {.cdecl.} =
     let data = cast[ptr NodeLists](clientData)
     case cursor.kind
-    of CXCursor_TypedefDecl:
+    of CXCursor_TypedefDecl, CXCursor_TypeAliasDecl:
+      # TypedefDecl = C typedef, TypeAliasDecl = C++11 "using X = Y"
       data.typedefs.add(cursor)
     of CXCursor_EnumDecl:
       data.enums.add(cursor)

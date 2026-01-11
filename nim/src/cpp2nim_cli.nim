@@ -468,6 +468,7 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
     sharedCode.add("type\n")
     sharedCode.add("  ccstring* = cstring  ## const char*\n")
     sharedCode.add("  ConstPointer* = pointer  ## const void*\n")
+    sharedCode.add("  ConstPtr*[T] = ptr T  ## const T* return type\n")
     sharedCode.add("\n")
 
     var sharedTypeCode = ""
@@ -490,7 +491,8 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
 
       for t in header.typedefs:
         if isSharedType(t.fullyQualified, analysis.sharedTypes):
-          sharedTypeCode.add(gen.generateTypedef(t, incl))
+          let td = gen.generateTypedef(t, incl)
+          sharedTypeCode.add(td)
 
     if sharedTypeCode.len > 0:
       sharedCode.add("type\n")
@@ -531,6 +533,7 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
       code.add("type\n")
       code.add("  ccstring* = cstring  ## const char*\n")
       code.add("  ConstPointer* = pointer  ## const void*\n")
+      code.add("  ConstPtr*[T] = ptr T  ## const T* return type\n")
       code.add("\n")
 
     let incl = extractFilename(filename)
