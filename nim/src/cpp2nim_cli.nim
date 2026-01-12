@@ -581,6 +581,8 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
       let incl = extractFilename(filename)
 
       for e in header.enums:
+        if opts.verbose:
+          echo "  Enum: ", e.fullyQualified, " shared=", isSharedType(e.fullyQualified, analysis.sharedTypes)
         if isSharedType(e.fullyQualified, analysis.sharedTypes):
           entries.add(SharedTypeEntry(
             name: e.fullyQualified,
@@ -616,7 +618,19 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
           ))
 
       for t in header.typedefs:
-        if isSharedType(t.fullyQualified, analysis.sharedTypes):
+        # Check if typedef has an embedded enum that's a shared type
+        if t.enumData.isSome:
+          let enumData = t.enumData.get
+          if isSharedType(enumData.fullyQualified, analysis.sharedTypes):
+            entries.add(SharedTypeEntry(
+              name: enumData.fullyQualified,
+              deps: @[],
+              kind: "enum",
+              code: gen.generateEnum(enumData, incl),
+              isGeneric: false,
+              isBaseClass: false
+            ))
+        elif isSharedType(t.fullyQualified, analysis.sharedTypes):
           let td = gen.generateTypedef(t, incl)
           if td.len > 0:
             entries.add(SharedTypeEntry(
@@ -693,7 +707,10 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
         typeCode.add(gen.generateClass(c, incl))
 
     for t in header.typedefs:
-      if not isSharedType(t.fullyQualified, analysis.sharedTypes):
+      # Skip if typedef itself is shared, or if it contains a shared enum
+      let isEmbeddedEnumShared = t.enumData.isSome and
+        isSharedType(t.enumData.get.fullyQualified, analysis.sharedTypes)
+      if not isSharedType(t.fullyQualified, analysis.sharedTypes) and not isEmbeddedEnumShared:
         typeCode.add(gen.generateTypedef(t, incl))
 
     if typeCode.len > 0:

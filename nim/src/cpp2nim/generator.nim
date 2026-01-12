@@ -402,6 +402,12 @@ proc initNimCodeGenerator*(config: Config = defaultConfig(),
     ignoreTypes: ignoreSet
   )
 
+proc shouldBeInheritable*(gen: NimCodeGenerator, typeName: string): bool =
+  ## Check if a type should have the `inheritable` pragma based on config.
+  let baseName = typeName.split("::")[^1]
+  result = typeName in gen.config.inheritableTypes or
+           baseName in gen.config.inheritableTypes
+
 proc shouldIgnoreType*(gen: NimCodeGenerator, typeName: string): bool =
   ## Check if a type should be ignored based on config.
   ## Only matches the BASE type, not template arguments.
@@ -539,7 +545,10 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
 
   let includePragma = if incl.len > 0: "header: \"" & incl & "\", " else: ""
   let unionPragma = if struct.isUnion: "union, " else: ""
-  let inheritablePragma = if inheritable: "inheritable, " else: ""
+
+  # Check if this type should be inheritable from config
+  let shouldInherit = inheritable or gen.shouldBeInheritable(struct.fullyQualified) or gen.shouldBeInheritable(struct.name)
+  let inheritablePragma = if shouldInherit: "inheritable, " else: ""
   let incompletePragma = if struct.isIncomplete: "incompleteStruct, " else: ""
 
   # Build template parameter string if this is a template struct
@@ -621,7 +630,10 @@ proc generateClass*(gen: NimCodeGenerator, cls: ClassDecl, incl: string = "",
 
   let includePragma = if incl.len > 0: "header: \"" & incl & "\", " else: ""
   let byrefPragma = if byref: ", byref" else: ", bycopy"
-  let inheritablePragma = if inheritable: "inheritable, " else: ""
+
+  # Check if this type should be inheritable from config
+  let shouldInherit = inheritable or gen.shouldBeInheritable(cls.fullyQualified) or gen.shouldBeInheritable(cls.name)
+  let inheritablePragma = if shouldInherit: "inheritable, " else: ""
 
   # Check if this class is a base class (used by other classes)
   let isBaseClass = cls.fullyQualified in gen.baseClasses or
