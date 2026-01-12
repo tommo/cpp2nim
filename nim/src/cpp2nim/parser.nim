@@ -909,6 +909,36 @@ proc findMissing(dependencies, provides: HashSet[string]): HashSet[string] =
       continue
     result.incl(dep)
 
+proc detectSysroot(): string =
+  ## Auto-detect system SDK/sysroot path for the current platform.
+  when defined(macosx):
+    const sdkPaths = [
+      "/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk",
+      "/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk",
+    ]
+    for path in sdkPaths:
+      if dirExists(path):
+        return path
+  elif defined(windows):
+    # Windows SDK paths - check common Visual Studio locations
+    const winSdkPaths = [
+      r"C:\Program Files (x86)\Windows Kits\10\Include",
+      r"C:\Program Files\Windows Kits\10\Include",
+    ]
+    for path in winSdkPaths:
+      if dirExists(path):
+        return path
+  elif defined(linux):
+    # Linux typically doesn't need explicit sysroot, but check for cross-compile setups
+    const linuxSysroots = [
+      "/usr/include",
+      "/usr/local/include",
+    ]
+    for path in linuxSysroots:
+      if dirExists(path):
+        return ""  # Linux usually works without explicit sysroot
+  return ""
+
 proc parseSingleFile(filename: string, config: Config): ParsedHeader =
   var ctx = initParserContext()
 
@@ -925,6 +955,18 @@ proc parseSingleFile(filename: string, config: Config): ParsedHeader =
     argStrings.add("-x")
     argStrings.add("c++")
     argStrings.add("-std=c++17")
+
+  # Auto-add macOS sysroot if not already specified
+  var hasSysroot = false
+  for arg in config.extraArgs:
+    if arg == "-isysroot" or arg.startsWith("-isysroot"):
+      hasSysroot = true
+      break
+  if not hasSysroot:
+    let sysroot = detectSysroot()
+    if sysroot.len > 0:
+      argStrings.add("-isysroot")
+      argStrings.add(sysroot)
 
   for arg in config.extraArgs:
     argStrings.add(arg)
