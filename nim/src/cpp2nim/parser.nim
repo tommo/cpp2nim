@@ -109,8 +109,28 @@ proc getFullyQualifiedType(cursorType: CXType): string =
   let constStr = if isConstQualifiedType(cursorType) != 0: "const " else: ""
 
   case cursorType.kind
+  of CXType_FunctionProto, CXType_FunctionNoProto:
+    # Function type: returnType (params)
+    let resultType = getResultType(cursorType)
+    let returnStr = getFullyQualifiedType(resultType)
+    var params: seq[string]
+    let numArgs = getNumArgTypes(cursorType)
+    for i in 0..<numArgs:
+      let argType = getArgType(cursorType, cuint(i))
+      params.add(getFullyQualifiedType(argType))
+    return returnStr & " (" & params.join(", ") & ")*"
   of CXType_Pointer:
     let pointee = getPointeeType(cursorType)
+    # Check if pointer to function - handle specially
+    if pointee.kind == CXType_FunctionProto or pointee.kind == CXType_FunctionNoProto:
+      let resultType = getResultType(pointee)
+      let returnStr = getFullyQualifiedType(resultType)
+      var params: seq[string]
+      let numArgs = getNumArgTypes(pointee)
+      for i in 0..<numArgs:
+        let argType = getArgType(pointee, cuint(i))
+        params.add(getFullyQualifiedType(argType))
+      return returnStr & " (" & params.join(", ") & ")*"
     return getFullyQualifiedType(pointee) & "*" & constStr.strip()
   of CXType_LValueReference:
     let refType = getPointeeType(cursorType)
@@ -158,7 +178,7 @@ proc getFullyQualifiedType(cursorType: CXType): string =
   else:
     return constStr & toNimStr(getTypeSpelling(cursorType))
 
-proc getCodeSpan(cursor: CXCursor, fileCache: var Table[string, seq[string]]): string =
+proc getCodeSpan(cursor: CXCursor, fileCache: var Table[string, seq[string]], debugName: string = ""): string =
   ## Extract source code text for a cursor's extent.
   let loc = getCursorLocation(cursor)
   var file: CXFile
@@ -187,18 +207,38 @@ proc getCodeSpan(cursor: CXCursor, fileCache: var Table[string, seq[string]]): s
   getExpansionLocation(getRangeStart(extent), addr startFile, addr startLine, addr startCol, addr startOff)
   getExpansionLocation(getRangeEnd(extent), addr endFile, addr endLine, addr endCol, addr endOff)
 
+  # If extent is invalid (all zeros), fall back to using cursor location
+  # Get from cursor column to end of line (or semicolon)
+  if startLine == 0 and startCol == 0:
+    let lineIdx = int(line) - 1
+    if lineIdx < 0 or lineIdx >= lines.len:
+      return ""
+    let lineText = lines[lineIdx]
+    let col = max(0, int(column) - 1)
+    if col >= lineText.len:
+      return ""
+    var endPos = lineText.find(';', col)
+    if endPos < 0:
+      endPos = lineText.len
+    return lineText[col..<endPos].strip()
+
   let lineIdx = int(startLine) - 1
-  if lineIdx >= lines.len:
+  if lineIdx < 0 or lineIdx >= lines.len:
     return ""
 
-  let off0 = int(startCol) - 1
+  let off0 = max(0, int(startCol) - 1)
   var off1 = int(endCol) - 1
   if startLine < endLine:
     off1 = -1
 
   let lineText = lines[lineIdx]
-  if off1 < 0:
+
+  if off0 >= lineText.len:
+    return ""
+  if off1 < 0 or off1 > lineText.len:
     return lineText[off0..^1]
+  if off1 <= off0:
+    return ""
   return lineText[off0..<off1]
 
 type
@@ -309,9 +349,34 @@ proc visitEnumDecl(v: var CppAstVisitor, node: CXCursor) =
 
   v.ctx[].visitedEnums.incl(nodeHash)
 
+proc extractFunctionPointerFieldName(sourceText: string): string =
+  ## Extract field name from C function pointer field declaration.
+  ## Handles patterns like: return_type(CALL_CONV* field_name)(params)
+  ## The field name is between the last '*' and ')' in the first parenthesized group.
+  var depth = 0
+  var starPos = -1
+  var closePos = -1
+
+  for i, c in sourceText:
+    if c == '(':
+      inc depth
+    elif c == ')':
+      if depth == 1 and starPos >= 0:
+        closePos = i
+        break
+      dec depth
+    elif c == '*' and depth == 1:
+      starPos = i
+
+  if starPos >= 0 and closePos > starPos:
+    result = sourceText[starPos+1..<closePos].strip()
+  else:
+    result = ""
+
 proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
   ## Parse the inner content of a struct.
   var fields: seq[FieldDecl]
+  var fieldCursors: seq[CXCursor]  # Keep cursors for source extraction if needed
   var deps: seq[string]
   var templateParams: seq[TemplateParam]
   var baseTypes: seq[string]
@@ -320,6 +385,7 @@ proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
   proc structChildVisitor(cursor, parent: CXCursor, clientData: CXClientData): CXChildVisitResult {.cdecl.} =
     type VisitorData = object
       fields: ptr seq[FieldDecl]
+      fieldCursors: ptr seq[CXCursor]
       deps: ptr seq[string]
       templateParams: ptr seq[TemplateParam]
       baseTypes: ptr seq[string]
@@ -342,6 +408,7 @@ proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
       let fieldType = getFullyQualifiedType(getCursorType(cursor))
       let isAnon = Cursor_isAnonymous(cursor) != 0
       data.fields[].add(initFieldDecl(fieldName, fieldType, isAnon))
+      data.fieldCursors[].add(cursor)
       data.deps[].add(getTemplateDependencies(fieldType))
     else:
       discard
@@ -350,17 +417,36 @@ proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
 
   type VisitorData = object
     fields: ptr seq[FieldDecl]
+    fieldCursors: ptr seq[CXCursor]
     deps: ptr seq[string]
     templateParams: ptr seq[TemplateParam]
     baseTypes: ptr seq[string]
 
   var visitorData = VisitorData(
     fields: addr fields,
+    fieldCursors: addr fieldCursors,
     deps: addr deps,
     templateParams: addr templateParams,
     baseTypes: addr baseTypes
   )
   discard visitChildren(node, structChildVisitor, addr visitorData)
+
+  # Post-process: fix function pointer field names where clang returns wrong name
+  # This happens for C syntax like: return_type(CALL_CONV* field_name)(params)
+  for i in 0..<fields.len:
+    let fieldType = fields[i].typeName
+    let name = fields[i].name
+    # Check if field name looks wrong - C type names shouldn't be field names
+    let looksLikeTypeName = name in ["size_t", "int", "void", "char", "short", "long", "unsigned", "signed", "float", "double"] or
+                            (name.len > 2 and name.endsWith("_t"))
+    # Check if it's a function pointer type or has suspicious name
+    if "*" in fieldType or looksLikeTypeName:
+      # Get source text and try to extract real field name
+      let sourceText = getCodeSpan(fieldCursors[i], v.ctx[].fileCache)
+      if sourceText.len > 0 and "*" in sourceText and "(" in sourceText:
+        let realName = extractFunctionPointerFieldName(sourceText)
+        if realName.len > 0 and realName != name:
+          fields[i] = initFieldDecl(realName, fieldType, fields[i].isAnonymous)
 
   let spelling = toNimStr(getCursorSpelling(node))
   let fullyQual = getFullyQualifiedName(node)

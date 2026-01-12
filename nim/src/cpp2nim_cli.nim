@@ -196,6 +196,18 @@ proc parseArgs(): CliOptions =
   var p = initOptParser()
   var cmdFound = false
 
+  # Helper to get option value - handles both -c=value and -c value forms
+  proc getVal(optName: string): string =
+    if p.val.len > 0:
+      return p.val
+    # Check if next token is an argument (not another option)
+    p.next()
+    if p.kind == cmdArgument:
+      return p.key
+    else:
+      logError("Option " & optName & " requires a value")
+      quit(1)
+
   while true:
     p.next()
     case p.kind
@@ -203,13 +215,13 @@ proc parseArgs(): CliOptions =
     of cmdShortOption, cmdLongOption:
       case p.key.toLowerAscii()
       of "c", "config":
-        result.configFile = p.val
+        result.configFile = getVal("-c/--config")
       of "o", "output":
-        result.outputDir = p.val
+        result.outputDir = getVal("-o/--output")
       of "i", "include":
-        result.includePaths.add(p.val)
+        result.includePaths.add(getVal("-I/--include"))
       of "d", "define":
-        result.defines.add(p.val)
+        result.defines.add(getVal("-D/--define"))
       of "v", "verbose":
         result.verbose = true
       of "q", "quiet":
@@ -219,21 +231,21 @@ proc parseArgs(): CliOptions =
       of "no-camel":
         result.camelCase = false
       of "namespace":
-        result.rootNamespace = p.val
+        result.rootNamespace = getVal("--namespace")
       of "rename":
-        let parts = p.val.split(":")
+        let parts = getVal("--rename").split(":")
         if parts.len == 2:
           result.renames[parts[0]] = parts[1]
         else:
           logWarning("Invalid rename format, expected OLD:NEW")
       of "ignore-type":
-        result.ignoreTypes.add(p.val)
+        result.ignoreTypes.add(getVal("--ignore-type"))
       of "ignore-file":
-        result.ignoreFiles.add(p.val)
+        result.ignoreFiles.add(getVal("--ignore-file"))
       of "parallel":
         result.parallel = true
       of "workers":
-        result.numWorkers = parseInt(p.val)
+        result.numWorkers = parseInt(getVal("--workers"))
       of "h", "help":
         result.command = cmdHelp
         return
