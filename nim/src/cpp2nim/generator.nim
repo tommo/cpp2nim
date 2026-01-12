@@ -482,6 +482,12 @@ proc generateParamsForConstructor*(gen: NimCodeGenerator, params: seq[Parameter]
 
 proc generateEnum*(gen: NimCodeGenerator, enumDecl: EnumDecl, incl: string = ""): string =
   ## Generate Nim enum declaration.
+  # Skip if enum name is in ignoreTypes or has no items
+  if gen.shouldIgnoreType(enumDecl.name) or gen.shouldIgnoreType(enumDecl.fullyQualified):
+    return ""
+  if enumDecl.items.len == 0:
+    return ""
+
   var name = gen.rename.getOrDefault(enumDecl.fullyQualified, enumDecl.name.split("::")[ ^1])
   name = cleanIdentifier(name)
 
@@ -516,6 +522,9 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
   ## Generate Nim struct/object declaration.
   # Skip anonymous structs/unions
   if struct.name.len == 0 or struct.name.startsWith("(anonymous"):
+    return ""
+  # Skip if in ignoreTypes
+  if gen.shouldIgnoreType(struct.name) or gen.shouldIgnoreType(struct.fullyQualified):
     return ""
 
   let shortName = struct.name.split("::")[ ^1]
@@ -603,6 +612,10 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
 proc generateClass*(gen: NimCodeGenerator, cls: ClassDecl, incl: string = "",
                     byref: bool = true, inheritable: bool = false, nofield: bool = false): string =
   ## Generate Nim class/object declaration.
+  # Skip if in ignoreTypes
+  if gen.shouldIgnoreType(cls.name) or gen.shouldIgnoreType(cls.fullyQualified):
+    return ""
+
   var name = gen.rename.getOrDefault(cls.fullyQualified, cls.fullyQualified.split("::")[ ^1])
   name = cleanIdentifier(name)
 
@@ -836,6 +849,9 @@ proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
 
 proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string = ""): string =
   ## Generate Nim typedef.
+  # Skip if typedef name is in ignoreTypes
+  if gen.shouldIgnoreType(typedef.name) or gen.shouldIgnoreType(typedef.fullyQualified):
+    return ""
   if typedef.typedefKind.isSome:
     if typedef.typedefKind.get == "struct" and typedef.structData.isSome:
       var structData = typedef.structData.get

@@ -2,8 +2,108 @@
 ##
 ## Command-line interface for generating Nim bindings from C++ headers.
 
-import std/[os, strutils, parseopt, tables, sets, json, times, terminal, options]
+import std/[os, strutils, parseopt, tables, sets, json, times, terminal, options, algorithm, sequtils]
 import cpp2nim/[models, config, analyzer, generator, parser, postprocess]
+
+
+proc applyPatchFile(code: string, outputPath: string, cfg: Config, configDir: string): string =
+  ## Apply patch file if configured for this output file.
+  ## Patch file content is prepended to the generated code.
+  let basename = extractFilename(outputPath)
+  if basename in cfg.patchFiles:
+    let patchPath = if cfg.patchFiles[basename].isAbsolute:
+      cfg.patchFiles[basename]
+    else:
+      configDir / cfg.patchFiles[basename]
+    if fileExists(patchPath):
+      let patchContent = readFile(patchPath)
+      return patchContent & "\n" & code
+    else:
+      stderr.writeLine "Warning: patch file not found: " & patchPath
+  return code
+
+
+type
+  SharedTypeEntry = object
+    ## Entry for a shared type with its dependencies for topological sorting.
+    name: string           ## Fully qualified name
+    deps: seq[string]      ## Dependencies (types this depends on)
+    kind: string           ## "enum", "struct", "class", "typedef"
+    code: string           ## Generated Nim code
+    isGeneric: bool        ## Has template parameters
+    isBaseClass: bool      ## Is used as a base class
+
+proc topoSortTypes(entries: seq[SharedTypeEntry]): seq[SharedTypeEntry] =
+  ## Topologically sort types so dependencies come first.
+  ## Generic types come before their instantiations.
+  ## Base classes come before derived classes.
+  var nameToEntry: Table[string, SharedTypeEntry]
+  var inDegree: Table[string, int]
+  var graph: Table[string, seq[string]]  # name -> types that depend on it
+
+  # Build lookup and initialize
+  for entry in entries:
+    nameToEntry[entry.name] = entry
+    inDegree[entry.name] = 0
+    graph[entry.name] = @[]
+
+  # Build dependency graph
+  for entry in entries:
+    for dep in entry.deps:
+      # Check if dep matches any entry (handle namespace stripping)
+      for name in nameToEntry.keys:
+        if name == dep or name.endsWith("::" & dep) or dep.endsWith("::" & name.split("::")[^1]):
+          if name != entry.name:
+            graph[name].add(entry.name)
+            inDegree[entry.name] = inDegree.getOrDefault(entry.name) + 1
+
+  # Kahn's algorithm with priority:
+  # 1. Generic types (isGeneric) first
+  # 2. Base classes second
+  # 3. Then by dependency order
+  var ready: seq[string]
+  for name, degree in inDegree:
+    if degree == 0:
+      ready.add(name)
+
+  # Sort ready queue: generics first, then base classes
+  ready.sort do (a, b: string) -> int:
+    let ea = nameToEntry[a]
+    let eb = nameToEntry[b]
+    if ea.isGeneric != eb.isGeneric:
+      return if ea.isGeneric: -1 else: 1
+    if ea.isBaseClass != eb.isBaseClass:
+      return if ea.isBaseClass: -1 else: 1
+    return cmp(a, b)
+
+  var sortedResult: seq[SharedTypeEntry]
+  while ready.len > 0:
+    let name = ready[0]
+    ready.delete(0)
+    sortedResult.add(nameToEntry[name])
+
+    for dependent in graph.getOrDefault(name):
+      inDegree[dependent] = inDegree[dependent] - 1
+      if inDegree[dependent] == 0:
+        # Insert maintaining sort order
+        var inserted = false
+        for i, r in ready:
+          let er = nameToEntry[r]
+          let ed = nameToEntry[dependent]
+          if (ed.isGeneric and not er.isGeneric) or
+             (ed.isBaseClass and not er.isBaseClass and not er.isGeneric):
+            ready.insert(dependent, i)
+            inserted = true
+            break
+        if not inserted:
+          ready.add(dependent)
+
+  # Add any remaining (cycles) at the end
+  for entry in entries:
+    if entry.name notin sortedResult.mapIt(it.name):
+      sortedResult.add(entry)
+
+  return sortedResult
 
 const
   Version = "0.1.0"
@@ -406,9 +506,11 @@ proc isSharedType(fullyQualified: string, sharedTypes: HashSet[string]): bool =
 
 proc cmdRunAll(opts: CliOptions, cfg: Config): int =
   ## Run complete pipeline: parse + analyze + generate.
-  let files = expandGlobs(opts.inputs)
+  # Use config headers if no CLI inputs provided
+  let inputs = if opts.inputs.len > 0: opts.inputs else: cfg.headers
+  let files = expandGlobs(inputs)
   if files.len == 0:
-    logError("No input files specified")
+    logError("No input files specified (use --config with 'headers' or pass files on command line)")
     return 1
 
   let startTime = cpuTime()
@@ -456,6 +558,7 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
   opts.logVerbose("Base classes: " & $analysis.baseClasses.len)
   let gen = initNimCodeGenerator(cfg, renames, analysis.baseClasses)
   let outputDir = if cfg.outputDir != ".": cfg.outputDir else: "."
+  let configDir = if opts.configFile.len > 0: parentDir(opts.configFile) else: getCurrentDir()
   createDir(outputDir)
 
   var filesGenerated = 0
@@ -471,35 +574,72 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
     sharedCode.add("  ConstPtr*[T] = ptr T  ## const T* return type\n")
     sharedCode.add("\n")
 
-    var sharedTypeCode = ""
+    # Collect shared types into entries for sorting
+    var entries: seq[SharedTypeEntry]
 
-    # Collect shared types from all headers
     for filename, header in parseResult.headers:
       let incl = extractFilename(filename)
 
       for e in header.enums:
         if isSharedType(e.fullyQualified, analysis.sharedTypes):
-          sharedTypeCode.add(gen.generateEnum(e, incl))
+          entries.add(SharedTypeEntry(
+            name: e.fullyQualified,
+            deps: @[],
+            kind: "enum",
+            code: gen.generateEnum(e, incl),
+            isGeneric: false,
+            isBaseClass: false
+          ))
 
       for s in header.structs:
         if isSharedType(s.fullyQualified, analysis.sharedTypes):
-          sharedTypeCode.add(gen.generateStruct(s, incl))
+          entries.add(SharedTypeEntry(
+            name: s.fullyQualified,
+            deps: s.underlyingDeps & s.baseTypes,
+            kind: "struct",
+            code: gen.generateStruct(s, incl),
+            isGeneric: s.templateParams.len > 0,
+            isBaseClass: s.fullyQualified in analysis.baseClasses or
+                         s.name in analysis.baseClasses
+          ))
 
       for c in header.classes:
         if isSharedType(c.fullyQualified, analysis.sharedTypes):
-          sharedTypeCode.add(gen.generateClass(c, incl))
+          entries.add(SharedTypeEntry(
+            name: c.fullyQualified,
+            deps: c.baseTypes,
+            kind: "class",
+            code: gen.generateClass(c, incl),
+            isGeneric: c.templateParams.len > 0,
+            isBaseClass: c.fullyQualified in analysis.baseClasses or
+                         c.name in analysis.baseClasses
+          ))
 
       for t in header.typedefs:
         if isSharedType(t.fullyQualified, analysis.sharedTypes):
           let td = gen.generateTypedef(t, incl)
-          sharedTypeCode.add(td)
+          if td.len > 0:
+            entries.add(SharedTypeEntry(
+              name: t.fullyQualified,
+              deps: t.underlyingDeps,
+              kind: "typedef",
+              code: td,
+              isGeneric: false,
+              isBaseClass: false
+            ))
 
-    if sharedTypeCode.len > 0:
+    # Sort types topologically
+    let sorted = topoSortTypes(entries)
+
+    # Generate code from sorted entries
+    if sorted.len > 0:
       sharedCode.add("type\n")
-      sharedCode.add(sharedTypeCode)
+      for entry in sorted:
+        sharedCode.add(entry.code)
 
-    # Apply post-processing
-    let processedShared = cfg.postFixes.processFile(sharedPath, sharedCode)
+    # Apply patch file and post-processing
+    let patchedShared = applyPatchFile(sharedCode, sharedPath, cfg, configDir)
+    let processedShared = cfg.postFixes.processFile(sharedPath, patchedShared)
     writeFile(sharedPath, processedShared)
     opts.logVerbose("Generated: " & sharedPath)
     inc filesGenerated
@@ -581,8 +721,9 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
       code.add("const\n")
       code.add(constCode)
 
-    # Apply post-processing
-    let processedCode = cfg.postFixes.processFile(outputPath, code)
+    # Apply patch file and post-processing
+    let patchedCode = applyPatchFile(code, outputPath, cfg, configDir)
+    let processedCode = cfg.postFixes.processFile(outputPath, patchedCode)
     writeFile(outputPath, processedCode)
     opts.logVerbose("Generated: " & outputPath)
     inc filesGenerated
@@ -606,16 +747,15 @@ proc main(): int =
     echo "cpp2nim version ", Version
     return 0
 
-  of cmdNone:
-    if opts.inputs.len == 0:
-      echo Usage
-      return 0
-    # Fall through to cmdAll if files given
-
-  of cmdParse, cmdAnalyze, cmdGenerate, cmdAll:
+  of cmdNone, cmdParse, cmdAnalyze, cmdGenerate, cmdAll:
     discard
 
   let cfg = buildConfig(opts)
+
+  # Show usage if no command and no inputs (from CLI or config)
+  if opts.command == cmdNone and opts.inputs.len == 0 and cfg.headers.len == 0:
+    echo Usage
+    return 0
 
   # Validate config if not quiet
   if not opts.quiet:

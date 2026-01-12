@@ -16,6 +16,9 @@ type
     ##     outputDir = "bindings"
     ##   )
 
+    # Input files
+    headers*: seq[string]          ## Header files/globs to process (e.g., ["src/*.h"])
+
     # Parsing options
     searchPaths*: seq[string]      ## Include directories for clang (-I paths)
     extraArgs*: seq[string]        ## Additional clang compiler arguments
@@ -43,9 +46,11 @@ type
 
     # Post-processing
     postFixes*: PostProcessor  ## Text replacements after generation
+    patchFiles*: Table[string, string]  ## Patch files to prepend (output_file -> patch_file_path)
 
 
 proc initConfig*(
+  headers: seq[string] = @[],
   searchPaths: seq[string] = @[],
   extraArgs: seq[string] = @[],
   defines: seq[string] = @[],
@@ -63,10 +68,12 @@ proc initConfig*(
   forceSharedTypes: seq[string] = @[],
   parallel = true,
   numWorkers = none(int),
-  postFixes = initPostProcessor()
+  postFixes = initPostProcessor(),
+  patchFiles: Table[string, string] = initTable[string, string]()
 ): Config =
   ## Create a Config with specified values and defaults.
   Config(
+    headers: headers,
     searchPaths: searchPaths,
     extraArgs: extraArgs,
     defines: defines,
@@ -84,7 +91,8 @@ proc initConfig*(
     forceSharedTypes: forceSharedTypes,
     parallel: parallel,
     numWorkers: numWorkers,
-    postFixes: postFixes
+    postFixes: postFixes,
+    patchFiles: patchFiles
   )
 
 
@@ -152,10 +160,11 @@ proc parsePostFixes(node: JsonNode): PostProcessor =
   ## Parse post_fixes from JSON config.
   ## Format: {"file_pattern": [{"pattern": "...", "replacement": "...", "mode": "regex|plain"}]}
   result = initPostProcessor()
-  if not node.hasKey("post_fixes"):
-    return
 
-  let postFixesNode = node["post_fixes"]
+  # Support both snake_case and camelCase
+  let postFixesNode = if node.hasKey("post_fixes"): node["post_fixes"]
+                      elif node.hasKey("postFixes"): node["postFixes"]
+                      else: return
   if postFixesNode.kind != JObject:
     return
 
@@ -181,33 +190,88 @@ proc parsePostFixes(node: JsonNode): PostProcessor =
 
 proc toConfig*(node: JsonNode): Config =
   ## Deserialize Config from JSON (for IPC).
+  ## Supports both snake_case and camelCase keys.
+
+  # Known config keys (snake_case canonical, camelCase aliases)
+  const knownKeys = [
+    "search_paths", "searchPaths",
+    "extra_args", "extraArgs",
+    "defines",
+    "c_mode", "cMode",
+    "enum_to_const", "enumToConst",
+    "ignore_files", "ignoreFiles",
+    "output_dir", "outputDir",
+    "root_namespace", "rootNamespace",
+    "camel_case", "camelCase",
+    "type_renames", "typeRenames",
+    "ignore_types", "ignoreTypes",
+    "ignore_fields", "ignoreFields",
+    "inheritable_types", "inheritableTypes",
+    "varargs_functions", "varargsFunctions",
+    "force_shared_types", "forceSharedTypes",
+    "parallel",
+    "num_workers", "numWorkers",
+    "post_fixes", "postFixes",
+    "patch_files", "patchFiles",
+    # Meta fields (not config options but allowed in config files)
+    "name", "headers", "includeDirs", "include_dirs"
+  ]
+
+  # Warn about unknown keys
+  if node.kind == JObject:
+    for key in node.keys:
+      if key notin knownKeys:
+        stderr.writeLine "Warning: unknown config key '" & key & "' (did you mean snake_case?)"
+
+  # Helper to get value with camelCase fallback
+  proc getWithAlias(n: JsonNode, snake, camel: string): JsonNode =
+    if n.hasKey(snake): n[snake]
+    elif n.hasKey(camel): n[camel]
+    else: newJNull()
+
+  proc getStrSeqWithAlias(n: JsonNode, snake, camel: string): seq[string] =
+    let val = n.getWithAlias(snake, camel)
+    if val.kind == JArray:
+      for item in val:
+        result.add(item.getStr)
+
   var typeRenames: Table[string, string]
-  if node.hasKey("type_renames"):
-    for k, v in node["type_renames"]:
+  let renamesNode = node.getWithAlias("type_renames", "typeRenames")
+  if renamesNode.kind == JObject:
+    for k, v in renamesNode:
       typeRenames[k] = v.getStr
 
-  let searchPaths = jsonToStrSeq(node, "search_paths")
-  let extraArgs = jsonToStrSeq(node, "extra_args")
+  let headers = jsonToStrSeq(node, "headers")
+  let searchPaths = node.getStrSeqWithAlias("search_paths", "searchPaths")
+  let extraArgs = node.getStrSeqWithAlias("extra_args", "extraArgs")
   let defines = jsonToStrSeq(node, "defines")
-  let enumToConst = jsonToStrSeq(node, "enum_to_const")
-  let ignoreFiles = jsonToStrSeq(node, "ignore_files")
-  let ignoreTypes = jsonToStrSeq(node, "ignore_types")
-  let ignoreFields = jsonToStrSeq(node, "ignore_fields")
-  let inheritableTypes = jsonToStrSeq(node, "inheritable_types")
-  let varargsFunctions = jsonToStrSeq(node, "varargs_functions")
-  let forceSharedTypes = jsonToStrSeq(node, "force_shared_types")
+  let enumToConst = node.getStrSeqWithAlias("enum_to_const", "enumToConst")
+  let ignoreFiles = node.getStrSeqWithAlias("ignore_files", "ignoreFiles")
+  let ignoreTypes = node.getStrSeqWithAlias("ignore_types", "ignoreTypes")
+  let ignoreFields = node.getStrSeqWithAlias("ignore_fields", "ignoreFields")
+  let inheritableTypes = node.getStrSeqWithAlias("inheritable_types", "inheritableTypes")
+  let varargsFunctions = node.getStrSeqWithAlias("varargs_functions", "varargsFunctions")
+  let forceSharedTypes = node.getStrSeqWithAlias("force_shared_types", "forceSharedTypes")
   let postFixes = parsePostFixes(node)
 
+  # Parse patch_files: {"output_file.nim": "patch_file.nim"}
+  var patchFiles: Table[string, string]
+  let patchNode = node.getWithAlias("patch_files", "patchFiles")
+  if patchNode.kind == JObject:
+    for k, v in patchNode:
+      patchFiles[k] = v.getStr
+
   Config(
+    headers: headers,
     searchPaths: searchPaths,
     extraArgs: extraArgs,
     defines: defines,
-    cMode: node{"c_mode"}.getBool(false),
+    cMode: node.getWithAlias("c_mode", "cMode").getBool(false),
     enumToConst: enumToConst,
     ignoreFiles: ignoreFiles,
-    outputDir: node{"output_dir"}.getStr("."),
-    rootNamespace: jsonToOptStr(node{"root_namespace"}),
-    camelCase: node{"camel_case"}.getBool(true),
+    outputDir: node.getWithAlias("output_dir", "outputDir").getStr("."),
+    rootNamespace: jsonToOptStr(node.getWithAlias("root_namespace", "rootNamespace")),
+    camelCase: node.getWithAlias("camel_case", "camelCase").getBool(true),
     typeRenames: typeRenames,
     ignoreTypes: ignoreTypes,
     ignoreFields: ignoreFields,
@@ -215,8 +279,9 @@ proc toConfig*(node: JsonNode): Config =
     varargsFunctions: varargsFunctions,
     forceSharedTypes: forceSharedTypes,
     parallel: node{"parallel"}.getBool(true),
-    numWorkers: jsonToOptInt(node{"num_workers"}),
-    postFixes: postFixes
+    numWorkers: jsonToOptInt(node.getWithAlias("num_workers", "numWorkers")),
+    postFixes: postFixes,
+    patchFiles: patchFiles
   )
 
 
@@ -229,7 +294,12 @@ proc mergeWith*(self, other: Config): Config =
   for k, v in other.typeRenames:
     mergedRenames[k] = v
 
+  var mergedPatchFiles = self.patchFiles
+  for k, v in other.patchFiles:
+    mergedPatchFiles[k] = v
+
   Config(
+    headers: self.headers & other.headers,
     searchPaths: self.searchPaths & other.searchPaths,
     extraArgs: self.extraArgs & other.extraArgs,
     defines: self.defines & other.defines,
@@ -247,7 +317,8 @@ proc mergeWith*(self, other: Config): Config =
     forceSharedTypes: self.forceSharedTypes & other.forceSharedTypes,
     parallel: other.parallel,
     numWorkers: if other.numWorkers.isSome: other.numWorkers else: self.numWorkers,
-    postFixes: PostProcessor(rules: self.postFixes.rules & other.postFixes.rules)
+    postFixes: PostProcessor(rules: self.postFixes.rules & other.postFixes.rules),
+    patchFiles: mergedPatchFiles
   )
 
 
