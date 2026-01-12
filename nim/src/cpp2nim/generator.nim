@@ -170,6 +170,14 @@ proc getNimType*(cType: string, rename: Table[string, string] = initTable[string
         return "cstring"
       if baseName == "pair":
         return "pointer"  # std::pair simplified to pointer
+      # std::array<T, N> -> array[N, T] (swap parameters)
+      if baseName == "array":
+        let templateParams = matches[1]
+        let parts = templateParams.split(",")
+        if parts.len == 2:
+          let elemType = getNimType(parts[0].strip(), rename)
+          let count = parts[1].strip()
+          return "array[" & count & ", " & elemType & "]"
       let templateParams = matches[1]
       result = baseName
 

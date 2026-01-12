@@ -1,14 +1,10 @@
 # Auto-generated shared types for cpp2nim
-# Generated: 2026-01-11T16:20:12+08:00
+# Generated: 2026-01-11T20:30:43+08:00
 
 type
   ccstring* = cstring  ## const char*
   ConstPointer* = pointer  ## const void*
   ConstPtr*[T] = ptr T  ## const T* return type
-
-  # Forward declarations / Base types
-  FieldsContainer* {.header: "FieldsContainer.hpp", importcpp: "ldtk::FieldsContainer", inheritable, byref.} = object
-  TagsContainer* {.header: "TagsContainer.hpp", importcpp: "ldtk::TagsContainer", inheritable, byref.} = object
 
   # Generic types (must be defined before instantiations)
   Point*[T] {.header: "DataTypes.hpp", importcpp: "ldtk::Point".} = object
@@ -25,6 +21,7 @@ type
     iid*: IID
 
 type
+  TagsContainer* {.header: "TagsContainer.hpp", importcpp: "ldtk::TagsContainer", byref.} = object of RootObj
   Layer* {.header: "Layer.hpp", importcpp: "ldtk::Layer", byref.} = object
     level*: ptr Level
     iid*: IID
@@ -113,6 +110,7 @@ type
     texture_rect*: IntRect
     fields*: cint
     nine_slice_borders*: NineSliceBorders
+  FieldsContainer* {.header: "FieldsContainer.hpp", importcpp: "ldtk::FieldsContainer", byref.} = object of RootObj
   Tile* {.header: "Tile.hpp", importcpp: "ldtk::Tile", byref.} = object
     layer*: ptr Layer
     coordId*: cint
@@ -140,6 +138,7 @@ type
     tile_size*: cint
     spacing*: cint
     padding*: cint
+  IField* {.header: "Field.hpp", importcpp: "ldtk::IField".} = object of RootObj
   World* {.header: "World.hpp", importcpp: "ldtk::World", byref.} = object
     iid*: IID
   EnumValue* {.header: "Enum.hpp", importcpp: "ldtk::EnumValue".} = object

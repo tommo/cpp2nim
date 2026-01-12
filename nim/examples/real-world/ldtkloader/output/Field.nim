@@ -1,10 +1,9 @@
 # Auto-generated Nim bindings for upstream/include/LDtkLoader/Field.hpp
-# Generated: 2026-01-11T16:20:12+08:00
+# Generated: 2026-01-11T20:30:43+08:00
 
 import shared_types
 
 type
-  IField* {.header: "Field.hpp", importcpp: "ldtk::IField".} = object of RootObj
   Field*[T] {.header: "Field.hpp", incompleteStruct, importcpp: "ldtk::Field".} = object of IField
   ArrayField*[T] {.header: "Field.hpp", incompleteStruct, importcpp: "ldtk::ArrayField".} = object of IField
   value_type* {.header: "Field.hpp", importcpp: "ldtk::Field::value_type".} = T

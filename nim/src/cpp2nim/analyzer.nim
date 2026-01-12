@@ -257,14 +257,18 @@ proc analyze*(self: DependencyAnalyzer, parseResult: ParseResult): AnalysisResul
   # Identify shared types
   result.sharedTypes = self.computeSharedTypes(parseResult, result.fileRelationships)
 
+  # Find base classes that need of RootObj
+  result.baseClasses = self.computeBaseClasses(parseResult)
+
+  # Base classes should be shared types (they're used by multiple derived classes)
+  for baseClass in result.baseClasses:
+    result.sharedTypes.incl(baseClass)
+
   # Compute type renames
   result.typeRenames = self.computeRenames(parseResult, result.sharedTypes)
 
   # Build import graph
   result.importGraph = self.computeImports(parseResult, result.fileRelationships)
-
-  # Find base classes that need of RootObj
-  result.baseClasses = self.computeBaseClasses(parseResult)
 
 
 # Legacy format support functions
