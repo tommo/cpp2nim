@@ -79,6 +79,35 @@ proc computeRelationships(self: DependencyAnalyzer, parseResult: ParseResult): T
     result[filename] = fileDeps
 
 
+proc resolveShortName(shortName: string, allNames: seq[string]): string =
+  ## Resolve a short type name to its fully qualified form.
+  ##
+  ## Args:
+  ##   shortName: Short type name like "Point"
+  ##   allNames: All fully qualified names like "ldtk::Point"
+  ##
+  ## Returns:
+  ##   Fully qualified name if found, otherwise empty string.
+  if shortName in allNames:
+    return shortName
+
+  # Try to find a match ending with ::shortName
+  let suffix = "::" & shortName
+  for name in allNames:
+    if name.endsWith(suffix):
+      return name
+
+  return ""
+
+
+proc getFieldDeps(fields: seq[FieldDecl]): seq[string] =
+  ## Extract type dependencies from struct/class fields.
+  for field in fields:
+    let deps = getTemplateDependencies(field.typeName)
+    for dep in deps:
+      result.add(dep)
+
+
 proc findTypeDependencies(self: DependencyAnalyzer, typeName: string, parseResult: ParseResult,
                           visited: var HashSet[string]): HashSet[string] =
   ## Find all types that a given type depends on.
@@ -101,9 +130,13 @@ proc findTypeDependencies(self: DependencyAnalyzer, typeName: string, parseResul
 
   for header in parseResult.headers.values:
     for s in header.structs:
-      allClasses.add((s.fullyQualified, s.underlyingDeps))
+      # Include both underlyingDeps and field type dependencies
+      let fieldDeps = getFieldDeps(s.fields)
+      allClasses.add((s.fullyQualified, s.underlyingDeps & s.baseTypes & fieldDeps))
     for c in header.classes:
-      allClasses.add((c.fullyQualified, @[]))
+      # Include base types and field type dependencies for classes
+      let fieldDeps = getFieldDeps(c.fields)
+      allClasses.add((c.fullyQualified, c.baseTypes & fieldDeps))
     for t in header.typedefs:
       allClasses.add((t.fullyQualified, t.underlyingDeps))
     for e in header.enums:
@@ -119,12 +152,16 @@ proc findTypeDependencies(self: DependencyAnalyzer, typeName: string, parseResul
       continue
 
     for dep in underlyingDeps:
-      if dep in allEnums:
-        result.incl(dep)
-      elif dep in classesFully:
-        if dep notin result:
-          let newDeps = self.findTypeDependencies(dep, parseResult, visited)
-          result.incl(dep)
+      # Try to resolve short names to fully qualified names
+      let resolvedDep = resolveShortName(dep, classesFully)
+      let resolvedEnum = resolveShortName(dep, allEnums)
+
+      if resolvedEnum.len > 0:
+        result.incl(resolvedEnum)
+      elif resolvedDep.len > 0:
+        if resolvedDep notin result:
+          let newDeps = self.findTypeDependencies(resolvedDep, parseResult, visited)
+          result.incl(resolvedDep)
           for d in newDeps:
             result.incl(d)
 

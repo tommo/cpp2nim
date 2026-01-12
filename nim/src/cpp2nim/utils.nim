@@ -62,16 +62,20 @@ proc cleanTypeName*(typeName: string): string =
   ## Example:
   ##   cleanTypeName("const int &") => "int"
   ##   cleanTypeName("const char *") => "char"
+  ##   cleanTypeName("const ldtk::Layer*const") => "ldtk::Layer"
   result = typeName
+  # Handle trailing *const (e.g., "Type*const" or "const Type*const")
+  if result.endsWith("*const"):
+    result = result[0..^7]  # Remove "*const"
+  # Handle trailing const* (e.g., "const Type const*")
   if result.endsWith("const *"):
     result = result[0..^8] & "*"
+  # Remove leading const
   if result.startsWith("const "):
     result = result[6..^1]
-  if result.len > 0 and result[^1] in {'&', '*'}:
-    if result.len > 1:
-      result = result[0..^3]
-    else:
-      result = result[0..^2]
+  # Remove trailing & or * (and preceding space if any)
+  while result.len > 0 and result[^1] in {'&', '*', ' '}:
+    result = result[0..^2]
   result = result.strip()
 
 

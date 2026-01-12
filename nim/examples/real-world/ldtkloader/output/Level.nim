@@ -1,23 +1,22 @@
 # Auto-generated Nim bindings for upstream/include/LDtkLoader/Level.hpp
-# Generated: 2026-01-11T20:30:43+08:00
+# Generated: 2026-01-12T09:31:55+08:00
 
-import shared_types, DataTypes, Layer
+import shared_types, World
 
 type
   BgImage* {.header: "Level.hpp", importcpp: "ldtk::Level::BgImage".} = object
-    path*: FilePath
-    pos*: IntPoint
-    scale*: FloatPoint
-    crop*: IntRect
+    path*: cint
+    pos*: cint
+    scale*: cint
+    crop*: cint
 
 proc assign*(self: ptr Level, a00: Level) {.importcpp: "# = #".}
 proc allLayers*(self: ptr Level): cint {.importcpp: "allLayers".}
-proc getLayer*(self: ptr Level, layer_name: cstring): var Layer {.importcpp: "getLayer".}
-proc getLayer*(self: ptr Level, iid: IID): var Layer {.importcpp: "getLayer".}
+proc getLayer*(self: ptr Level): cint {.importcpp: "getLayer".}
 proc hasBgImage*(self: ptr Level): bool {.importcpp: "hasBgImage".}
 proc getBgImage*[B](self: ptr Level): var BgImage {.importcpp: "getBgImage".}
 proc allNeighbours*(self: ptr Level): cint {.importcpp: "allNeighbours".}
 proc getNeighbours*(self: ptr Level): cint {.importcpp: "getNeighbours".}
-proc getNeighbourDirection*[D](self: ptr Level, level: Level): Dir {.importcpp: "getNeighbourDirection".}
+proc getNeighbourDirection*(self: ptr Level): cint {.importcpp: "getNeighbourDirection".}
 proc newLevel*(a00: Level): Level {.constructor,importcpp: "ldtk::Level(@)".}
 proc newLevel*(j: cint, w: ptr World): Level {.constructor,importcpp: "ldtk::Level(@)".}

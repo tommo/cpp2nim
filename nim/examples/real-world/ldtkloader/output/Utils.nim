@@ -1,11 +1,11 @@
 # Auto-generated Nim bindings for upstream/include/LDtkLoader/Utils.hpp
-# Generated: 2026-01-11T20:30:43+08:00
+# Generated: 2026-01-12T09:31:55+08:00
 
-import shared_types, DataTypes
+import shared_types
 
-proc getLayerTypeFromString*(type_name: cstring): LayerType {.importc: "ldtk::getLayerTypeFromString".}
-proc getWorldLayoutFromString*(layout_name: cstring): WorldLayout {.importc: "ldtk::getWorldLayoutFromString".}
-proc getDirFromString*[D](dir_name: cstring): Dir {.importc: "ldtk::getDirFromString".}
-proc getFieldTypeFromString*(fieldtype_name: cstring): FieldType {.importc: "ldtk::getFieldTypeFromString".}
+proc getLayerTypeFromString*(): cint {.importc: "ldtk::getLayerTypeFromString".}
+proc getWorldLayoutFromString*(): cint {.importc: "ldtk::getWorldLayoutFromString".}
+proc getDirFromString*(): cint {.importc: "ldtk::getDirFromString".}
+proc getFieldTypeFromString*(): cint {.importc: "ldtk::getFieldTypeFromString".}
 proc print_error*(fn: cstring, msg: cstring) {.importc: "ldtk::print_error".}
 proc print_json_error*(msg: cstring) {.importc: "ldtk::print_json_error".}

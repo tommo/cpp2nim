@@ -1,5 +1,5 @@
 # Auto-generated Nim bindings for upstream/include/LDtkLoader/Field.hpp
-# Generated: 2026-01-11T20:30:43+08:00
+# Generated: 2026-01-12T09:31:55+08:00
 
 import shared_types
 
