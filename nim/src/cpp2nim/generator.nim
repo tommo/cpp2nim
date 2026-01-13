@@ -661,8 +661,10 @@ proc generateClass*(gen: NimCodeGenerator, cls: ClassDecl, incl: string = "",
     var params: seq[string]
     for p in cls.templateParams:
       if p.typeName.isSome:
-        params.add(p.name & ":" & getNimType(p.typeName.get, gen.rename))
+        # Non-type parameter (e.g., int N)
+        params.add(p.name & ": static " & getNimType(p.typeName.get, gen.rename))
       else:
+        # Type parameter
         params.add(p.name)
     templateStr = "[" & params.join("; ") & "]"
 

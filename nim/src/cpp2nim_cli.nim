@@ -185,6 +185,17 @@ proc logWarning(msg: string) =
 proc logSuccess(msg: string) =
   styledWriteLine(stdout, fgGreen, "✓ ", resetStyle, msg)
 
+proc getHeaderIncludePath(filename: string, searchPaths: seq[string]): string =
+  ## Get the proper include path for a header file.
+  ## Strips search path prefix if present, otherwise returns just the basename.
+  ## Example: "include/RmlUi/Core/Element.h" with searchPath "include" -> "RmlUi/Core/Element.h"
+  for searchPath in searchPaths:
+    let prefix = if searchPath.endsWith("/"): searchPath else: searchPath & "/"
+    if filename.startsWith(prefix):
+      return filename[prefix.len..^1]
+  # No search path matched - return just the filename
+  return extractFilename(filename)
+
 
 proc parseArgs(): CliOptions =
   result = CliOptions(
@@ -470,7 +481,7 @@ proc cmdGenerateBindings(opts: CliOptions, cfg: Config): int =
     var code = "# Auto-generated Nim bindings for " & filename & "\n"
     code.add("# Generated: " & $now() & "\n\n")
 
-    let incl = extractFilename(filename)
+    let incl = getHeaderIncludePath(filename, cfg.searchPaths)
 
     # Generate enums
     for e in header.enums:
@@ -590,7 +601,7 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
     var entries: seq[SharedTypeEntry]
 
     for filename, header in parseResult.headers:
-      let incl = extractFilename(filename)
+      let incl = getHeaderIncludePath(filename, cfg.searchPaths)
 
       for e in header.enums:
         if opts.verbose:
@@ -702,7 +713,7 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
       code.add("  ConstPtr*[T] = ptr T  ## const T* return type\n")
       code.add("\n")
 
-    let incl = extractFilename(filename)
+    let incl = getHeaderIncludePath(filename, cfg.searchPaths)
 
     # Collect types (excluding shared types)
     var typeCode = ""
