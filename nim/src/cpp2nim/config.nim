@@ -26,6 +26,7 @@ type
     cMode*: bool                   ## Parse as C instead of C++ (-x c vs -x c++)
     enumToConst*: seq[string]      ## Enum names to treat as constants
     ignoreFiles*: seq[string]      ## Files to skip during parsing
+    preIncludeHeaders*: seq[string]  ## Headers to force-include before parsing each file (for C libs with typedef deps)
 
     # Output options
     outputDir*: string             ## Directory for generated output
@@ -57,6 +58,7 @@ proc initConfig*(
   cMode = false,
   enumToConst: seq[string] = @[],
   ignoreFiles: seq[string] = @[],
+  preIncludeHeaders: seq[string] = @[],
   outputDir = ".",
   rootNamespace = none(string),
   camelCase = true,
@@ -80,6 +82,7 @@ proc initConfig*(
     cMode: cMode,
     enumToConst: enumToConst,
     ignoreFiles: ignoreFiles,
+    preIncludeHeaders: preIncludeHeaders,
     outputDir: outputDir,
     rootNamespace: rootNamespace,
     camelCase: camelCase,
@@ -136,6 +139,7 @@ proc `%`*(c: Config): JsonNode =
     "c_mode": c.cMode,
     "enum_to_const": c.enumToConst,
     "ignore_files": c.ignoreFiles,
+    "pre_include_headers": c.preIncludeHeaders,
     "output_dir": c.outputDir,
     "root_namespace": optToJson(c.rootNamespace),
     "camel_case": c.camelCase,
@@ -200,6 +204,7 @@ proc toConfig*(node: JsonNode): Config =
     "c_mode", "cMode",
     "enum_to_const", "enumToConst",
     "ignore_files", "ignoreFiles",
+    "pre_include_headers", "preIncludeHeaders",
     "output_dir", "outputDir",
     "root_namespace", "rootNamespace",
     "camel_case", "camelCase",
@@ -247,6 +252,7 @@ proc toConfig*(node: JsonNode): Config =
   let defines = jsonToStrSeq(node, "defines")
   let enumToConst = node.getStrSeqWithAlias("enum_to_const", "enumToConst")
   let ignoreFiles = node.getStrSeqWithAlias("ignore_files", "ignoreFiles")
+  let preIncludeHeaders = node.getStrSeqWithAlias("pre_include_headers", "preIncludeHeaders")
   let ignoreTypes = node.getStrSeqWithAlias("ignore_types", "ignoreTypes")
   let ignoreFields = node.getStrSeqWithAlias("ignore_fields", "ignoreFields")
   let inheritableTypes = node.getStrSeqWithAlias("inheritable_types", "inheritableTypes")
@@ -269,6 +275,7 @@ proc toConfig*(node: JsonNode): Config =
     cMode: node.getWithAlias("c_mode", "cMode").getBool(false),
     enumToConst: enumToConst,
     ignoreFiles: ignoreFiles,
+    preIncludeHeaders: preIncludeHeaders,
     outputDir: node.getWithAlias("output_dir", "outputDir").getStr("."),
     rootNamespace: jsonToOptStr(node.getWithAlias("root_namespace", "rootNamespace")),
     camelCase: node.getWithAlias("camel_case", "camelCase").getBool(true),
@@ -306,6 +313,7 @@ proc mergeWith*(self, other: Config): Config =
     cMode: if other.cMode: other.cMode else: self.cMode,
     enumToConst: self.enumToConst & other.enumToConst,
     ignoreFiles: self.ignoreFiles & other.ignoreFiles,
+    preIncludeHeaders: self.preIncludeHeaders & other.preIncludeHeaders,
     outputDir: if other.outputDir != ".": other.outputDir else: self.outputDir,
     rootNamespace: if other.rootNamespace.isSome: other.rootNamespace else: self.rootNamespace,
     camelCase: other.camelCase,

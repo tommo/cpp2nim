@@ -895,8 +895,17 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
         structData.fullyQualified = typedef.fullyQualified
         return gen.generateStruct(structData, incl)
       else:
-        # Regular struct typedef
-        return gen.generateStruct(structData, incl)
+        # Regular struct typedef - generate the struct
+        result = gen.generateStruct(structData, incl)
+        # If typedef name differs from struct name, also generate an alias
+        # e.g., typedef struct mjData_ mjData; -> mjData* = mjData_
+        if typedef.name != structData.name and typedef.name.len > 0:
+          let aliasName = cleanIdentifier(typedef.name)
+          let structName = cleanIdentifier(structData.name)
+          let importPragma = if gen.config.cMode: "importc" else: "importcpp"
+          let includePragma = if incl.len > 0: "header: \"" & incl & "\", " else: ""
+          result.add("  " & aliasName & "* {." & includePragma & importPragma & ": \"" & typedef.fullyQualified & "\".} = " & structName & "\n")
+        return result
 
     if typedef.typedefKind.get == "enum" and typedef.enumData.isSome:
       return gen.generateEnum(typedef.enumData.get, incl)

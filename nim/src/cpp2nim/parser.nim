@@ -695,26 +695,32 @@ proc visitTypedefDecl(v: var CppAstVisitor, node: CXCursor) =
     of CXCursor_StructDecl:
       let innerHash = hashCursor(inner)
       if innerHash in v.ctx[].visitedStructs:
-        return
-      v.ctx[].visitedStructs.incl(innerHash)
-      structData = some(v.parseStructInner(inner))
-      typedefKind = some("struct")
+        # Struct already visited - this is just a typedef alias (e.g., typedef struct Foo_ Foo;)
+        typedefKind = some("alias")
+      else:
+        v.ctx[].visitedStructs.incl(innerHash)
+        structData = some(v.parseStructInner(inner))
+        typedefKind = some("struct")
     of CXCursor_UnionDecl:
       let innerHash = hashCursor(inner)
       if innerHash in v.ctx[].visitedStructs:
-        return
-      v.ctx[].visitedStructs.incl(innerHash)
-      var sd = v.parseStructInner(inner)
-      sd.isUnion = true
-      structData = some(sd)
-      typedefKind = some("struct")
+        # Union already visited - this is just a typedef alias
+        typedefKind = some("alias")
+      else:
+        v.ctx[].visitedStructs.incl(innerHash)
+        var sd = v.parseStructInner(inner)
+        sd.isUnion = true
+        structData = some(sd)
+        typedefKind = some("struct")
     of CXCursor_EnumDecl:
       if spelling in v.config.enumToConst:
         return
       let innerHash = hashCursor(inner)
       if innerHash in v.ctx[].visitedEnums:
-        return
-      v.ctx[].visitedEnums.incl(innerHash)
+        # Enum already visited - this is just a typedef alias
+        typedefKind = some("alias")
+      else:
+        v.ctx[].visitedEnums.incl(innerHash)
 
       var items: seq[EnumItem]
       proc enumChildVisitor2(cursor, parent: CXCursor, clientData: CXClientData): CXChildVisitResult {.cdecl.} =
@@ -984,6 +990,11 @@ proc parseSingleFile(filename: string, config: Config): ParsedHeader =
 
   for path in config.searchPaths:
     argStrings.add("-I" & path)
+
+  # Force-include headers (for C libs with typedef dependencies across headers)
+  for header in config.preIncludeHeaders:
+    argStrings.add("-include")
+    argStrings.add(header)
 
   for s in argStrings:
     clangArgs.add(s.cstring)
