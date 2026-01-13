@@ -136,6 +136,7 @@ Options:
   --ignore-file=FILE    Ignore file pattern (can be repeated)
   --parallel            Enable parallel parsing
   --workers=N           Number of parallel workers
+  -f, --force           Force regeneration even if outputs are up to date
 
 Examples:
   cpp2nim parse -I/usr/include mylib/*.h -o parsed.json
@@ -166,6 +167,7 @@ type
     ignoreFiles: seq[string]
     parallel: bool
     numWorkers: int
+    force: bool  ## Force regeneration even if outputs are up to date
 
 
 proc log(opts: CliOptions, msg: string) =
@@ -195,6 +197,38 @@ proc getHeaderIncludePath(filename: string, searchPaths: seq[string]): string =
       return filename[prefix.len..^1]
   # No search path matched - return just the filename
   return extractFilename(filename)
+
+proc needsRegeneration(inputFiles: seq[string], configFile: string, outputDir: string): bool =
+  ## Check if any input file or config is newer than the oldest output file.
+  ## Returns true if regeneration is needed, false if outputs are up to date.
+  if not dirExists(outputDir):
+    return true
+
+  # Find the oldest output .nim file
+  var oldestOutput = high(Time)
+  var hasOutputs = false
+  for file in walkDir(outputDir):
+    if file.kind == pcFile and file.path.endsWith(".nim"):
+      hasOutputs = true
+      let mtime = getLastModificationTime(file.path)
+      if mtime < oldestOutput:
+        oldestOutput = mtime
+
+  if not hasOutputs:
+    return true
+
+  # Check if config file is newer than oldest output
+  if configFile.len > 0 and fileExists(configFile):
+    if getLastModificationTime(configFile) > oldestOutput:
+      return true
+
+  # Check if any input header is newer than oldest output
+  for inputFile in inputFiles:
+    if fileExists(inputFile):
+      if getLastModificationTime(inputFile) > oldestOutput:
+        return true
+
+  return false
 
 
 proc parseArgs(): CliOptions =
@@ -257,6 +291,8 @@ proc parseArgs(): CliOptions =
         result.parallel = true
       of "workers":
         result.numWorkers = parseInt(getVal("--workers"))
+      of "f", "force":
+        result.force = true
       of "h", "help":
         result.command = cmdHelp
         return
@@ -536,6 +572,13 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
     logError("No input files specified (use --config with 'headers' or pass files on command line)")
     return 1
 
+  let outputDir = if cfg.outputDir != ".": cfg.outputDir else: "."
+
+  # Check if regeneration is needed (unless --force is specified)
+  if not opts.force and not needsRegeneration(files, opts.configFile, outputDir):
+    logSuccess("Outputs are up to date (use --force to regenerate)")
+    return 0
+
   let startTime = cpuTime()
   opts.log("Running cpp2nim pipeline on " & $files.len & " file(s)...")
 
@@ -580,7 +623,6 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
   opts.log("\n[3/3] Generating bindings...")
   opts.logVerbose("Base classes: " & $analysis.baseClasses.len)
   let gen = initNimCodeGenerator(cfg, renames, analysis.baseClasses)
-  let outputDir = if cfg.outputDir != ".": cfg.outputDir else: "."
   let configDir = if opts.configFile.len > 0: parentDir(opts.configFile) else: getCurrentDir()
   createDir(outputDir)
 
