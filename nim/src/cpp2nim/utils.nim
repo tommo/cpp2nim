@@ -90,8 +90,10 @@ proc getTemplateDependencies*(typeName: string): seq[string] =
   ## Example:
   ##   getTemplateDependencies("std::vector<MyClass>") => @["std::vector", "MyClass"]
   ##   getTemplateDependencies("std::map<K, V>") => @["std::map", "K", "V"]
+  ##   getTemplateDependencies("mjSolverStat[4000]") => @["mjSolverStat"]
   let cleaned = cleanTypeName(typeName)
 
+  # Handle C++ templates (type<params>)
   if '<' in cleaned and cleaned.endsWith(">"):
     let idx = cleaned.find('<')
     let base = cleaned[0..<idx].strip()
@@ -124,6 +126,12 @@ proc getTemplateDependencies*(typeName: string): seq[string] =
     let param = currentParam.strip()
     if param.len > 0:
       result.add(getTemplateDependencies(param))
+  # Handle C arrays (type[N] or type[])
+  elif '[' in cleaned and cleaned.endsWith("]"):
+    let idx = cleaned.find('[')
+    let base = cleaned[0..<idx].strip()
+    if base.len > 0:
+      result.add(getTemplateDependencies(base))
   else:
     result.add(cleaned)
 

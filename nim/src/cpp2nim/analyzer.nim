@@ -138,7 +138,12 @@ proc findTypeDependencies(self: DependencyAnalyzer, typeName: string, parseResul
       let fieldDeps = getFieldDeps(c.fields)
       allClasses.add((c.fullyQualified, c.baseTypes & fieldDeps))
     for t in header.typedefs:
-      allClasses.add((t.fullyQualified, t.underlyingDeps))
+      # Include field dependencies if typedef has embedded struct
+      var deps = t.underlyingDeps
+      if t.structData.isSome:
+        let fieldDeps = getFieldDeps(t.structData.get.fields)
+        deps = deps & fieldDeps
+      allClasses.add((t.fullyQualified, deps))
     for e in header.enums:
       allEnums.add(e.fullyQualified)
 

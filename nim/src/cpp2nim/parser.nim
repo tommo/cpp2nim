@@ -373,6 +373,35 @@ proc extractFunctionPointerFieldName(sourceText: string): string =
   else:
     result = ""
 
+proc getNestedFieldsFromAnonymousStruct(fieldCursor: CXCursor): seq[FieldDecl] =
+  ## Get fields from an anonymous struct/union field.
+  ## For fields like `struct { int x; float y; } myfield;`, returns the nested fields (x, y).
+  let fieldType = getCursorType(fieldCursor)
+  let typeDecl = getTypeDeclaration(fieldType)
+
+  if typeDecl.kind notin {CXCursor_StructDecl, CXCursor_UnionDecl}:
+    return @[]
+
+  # Visit children of the anonymous struct to get its fields
+  proc nestedFieldVisitor(cursor, parent: CXCursor, clientData: CXClientData): CXChildVisitResult {.cdecl.} =
+    let fieldsPtr = cast[ptr seq[FieldDecl]](clientData)
+    if cursor.kind == CXCursor_FieldDecl:
+      let name = toNimStr(getCursorSpelling(cursor))
+      let typeName = getFullyQualifiedType(getCursorType(cursor))
+      # Check if the field's TYPE is an anonymous struct/union
+      let nestedTypeDecl = getTypeDeclaration(getCursorType(cursor))
+      let isAnon = Cursor_isAnonymous(nestedTypeDecl) != 0
+      # Recursively handle nested anonymous structs
+      var nestedFields: seq[FieldDecl]
+      if isAnon:
+        nestedFields = getNestedFieldsFromAnonymousStruct(cursor)
+      fieldsPtr[].add(initFieldDecl(name, typeName, isAnon, nestedFields))
+    return CXChildVisit_Continue
+
+  var nestedFields: seq[FieldDecl]
+  discard visitChildren(typeDecl, nestedFieldVisitor, addr nestedFields)
+  result = nestedFields
+
 proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
   ## Parse the inner content of a struct.
   var fields: seq[FieldDecl]
@@ -406,7 +435,9 @@ proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
     of CXCursor_FieldDecl:
       let fieldName = toNimStr(getCursorSpelling(cursor))
       let fieldType = getFullyQualifiedType(getCursorType(cursor))
-      let isAnon = Cursor_isAnonymous(cursor) != 0
+      # Check if the field's TYPE is an anonymous struct/union
+      let typeDecl = getTypeDeclaration(getCursorType(cursor))
+      let isAnon = Cursor_isAnonymous(typeDecl) != 0
       data.fields[].add(initFieldDecl(fieldName, fieldType, isAnon))
       data.fieldCursors[].add(cursor)
       data.deps[].add(getTemplateDependencies(fieldType))
@@ -455,6 +486,13 @@ proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
         let realName = extractFunctionPointerFieldName(sourceText)
         if realName.len > 0 and realName != name and ',' notin realName and ' ' notin realName:
           fields[i] = initFieldDecl(realName, fieldType, fields[i].isAnonymous)
+
+  # Post-process: capture nested fields for anonymous struct/union fields
+  for i in 0..<fields.len:
+    if fields[i].isAnonymous and fields[i].name.len > 0:
+      let nestedFields = getNestedFieldsFromAnonymousStruct(fieldCursors[i])
+      if nestedFields.len > 0:
+        fields[i] = initFieldDecl(fields[i].name, fields[i].typeName, true, nestedFields)
 
   let spelling = toNimStr(getCursorSpelling(node))
   let fullyQual = getFullyQualifiedName(node)
@@ -505,12 +543,14 @@ proc visitClassDecl(v: var CppAstVisitor, node: CXCursor) =
     return
 
   var fields: seq[FieldDecl]
+  var fieldCursors: seq[CXCursor]
   var templateParams: seq[TemplateParam]
   var baseTypes: seq[string]
 
   proc classChildVisitor(cursor, parent: CXCursor, clientData: CXClientData): CXChildVisitResult {.cdecl.} =
     type VisitorData = object
       fields: ptr seq[FieldDecl]
+      fieldCursors: ptr seq[CXCursor]
       templateParams: ptr seq[TemplateParam]
       baseTypes: ptr seq[string]
 
@@ -533,8 +573,11 @@ proc visitClassDecl(v: var CppAstVisitor, node: CXCursor) =
       if fieldAccess != CX_CXXPrivate:
         let fieldName = toNimStr(getCursorSpelling(cursor))
         let fieldType = getFullyQualifiedType(getCursorType(cursor))
-        let isAnon = Cursor_isAnonymous(cursor) != 0
+        # Check if the field's TYPE is an anonymous struct/union
+        let typeDecl = getTypeDeclaration(getCursorType(cursor))
+        let isAnon = Cursor_isAnonymous(typeDecl) != 0
         data.fields[].add(initFieldDecl(fieldName, fieldType, isAnon))
+        data.fieldCursors[].add(cursor)
     else:
       discard
 
@@ -542,15 +585,24 @@ proc visitClassDecl(v: var CppAstVisitor, node: CXCursor) =
 
   type VisitorData = object
     fields: ptr seq[FieldDecl]
+    fieldCursors: ptr seq[CXCursor]
     templateParams: ptr seq[TemplateParam]
     baseTypes: ptr seq[string]
 
   var visitorData = VisitorData(
     fields: addr fields,
+    fieldCursors: addr fieldCursors,
     templateParams: addr templateParams,
     baseTypes: addr baseTypes
   )
   discard visitChildren(node, classChildVisitor, addr visitorData)
+
+  # Post-process: capture nested fields for anonymous struct/union fields
+  for i in 0..<fields.len:
+    if fields[i].isAnonymous and fields[i].name.len > 0:
+      let nestedFields = getNestedFieldsFromAnonymousStruct(fieldCursors[i])
+      if nestedFields.len > 0:
+        fields[i] = initFieldDecl(fields[i].name, fields[i].typeName, true, nestedFields)
 
   let spelling = toNimStr(getCursorSpelling(node))
   let fullyQual = getFullyQualifiedName(node)

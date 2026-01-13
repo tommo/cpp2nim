@@ -49,10 +49,12 @@ type
     ## Fields:
     ##   name: Field name.
     ##   typeName: The C++ type.
-    ##   isAnonymous: Whether this is from an anonymous union/struct.
+    ##   isAnonymous: Whether this field's type is an anonymous struct/union.
+    ##   nestedFields: For anonymous struct fields, the fields of the nested struct.
     name*: string
     typeName*: string
     isAnonymous*: bool
+    nestedFields*: seq[FieldDecl]
 
   TemplateParam* = object
     ## A template parameter - either just a name or a (name, type) pair.
@@ -225,8 +227,8 @@ proc initEnumDecl*(name, fullyQualified, underlyingType: string,
   EnumDecl(name: name, fullyQualified: fullyQualified,
            underlyingType: underlyingType, items: items, comment: comment)
 
-proc initFieldDecl*(name, typeName: string, isAnonymous = false): FieldDecl =
-  FieldDecl(name: name, typeName: typeName, isAnonymous: isAnonymous)
+proc initFieldDecl*(name, typeName: string, isAnonymous = false, nestedFields: seq[FieldDecl] = @[]): FieldDecl =
+  FieldDecl(name: name, typeName: typeName, isAnonymous: isAnonymous, nestedFields: nestedFields)
 
 proc initTemplateParam*(name: string, typeName = none(string)): TemplateParam =
   TemplateParam(name: name, typeName: typeName)
@@ -319,7 +321,9 @@ proc `%`*(e: EnumDecl): JsonNode =
   }
 
 proc `%`*(f: FieldDecl): JsonNode =
-  %*{"name": f.name, "type_name": f.typeName, "is_anonymous": f.isAnonymous}
+  result = %*{"name": f.name, "type_name": f.typeName, "is_anonymous": f.isAnonymous}
+  if f.nestedFields.len > 0:
+    result["nested_fields"] = %f.nestedFields
 
 proc `%`*(t: TemplateParam): JsonNode =
   if t.typeName.isSome:
@@ -462,10 +466,15 @@ proc toEnumDecl*(node: JsonNode): EnumDecl =
   )
 
 proc toFieldDecl*(node: JsonNode): FieldDecl =
+  var nestedFields: seq[FieldDecl]
+  if node.hasKey("nested_fields"):
+    for nf in node["nested_fields"]:
+      nestedFields.add(toFieldDecl(nf))
   FieldDecl(
     name: node["name"].getStr,
     typeName: node["type_name"].getStr,
-    isAnonymous: node{"is_anonymous"}.getBool(false)
+    isAnonymous: node{"is_anonymous"}.getBool(false),
+    nestedFields: nestedFields
   )
 
 proc toTemplateParam*(node: JsonNode): TemplateParam =
@@ -718,13 +727,23 @@ proc toLegacyDict*(f: FieldDecl): JsonNode =
   result = %*{"name": f.name, "type": f.typeName}
   if f.isAnonymous:
     result["is_anonymous"] = %true
+  if f.nestedFields.len > 0:
+    var nested = newJArray()
+    for nf in f.nestedFields:
+      nested.add(toLegacyDict(nf))
+    result["nested_fields"] = nested
 
 proc fromLegacyFieldDict*(data: JsonNode): FieldDecl =
   ## Create from legacy dict format.
+  var nestedFields: seq[FieldDecl]
+  if data.hasKey("nested_fields"):
+    for nf in data["nested_fields"]:
+      nestedFields.add(fromLegacyFieldDict(nf))
   FieldDecl(
     name: data{"name"}.getStr(""),
     typeName: data{"type"}.getStr(""),
-    isAnonymous: data{"is_anonymous"}.getBool(false)
+    isAnonymous: data{"is_anonymous"}.getBool(false),
+    nestedFields: nestedFields
   )
 
 proc toLegacyDict*(s: StructDecl): JsonNode =

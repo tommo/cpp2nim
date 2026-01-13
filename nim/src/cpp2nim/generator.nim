@@ -537,6 +537,38 @@ proc generateEnum*(gen: NimCodeGenerator, enumDecl: EnumDecl, incl: string = "")
   result.add(itemsTxt & "\n")
 
 
+proc generateInlineNestedFields(gen: NimCodeGenerator, field: FieldDecl,
+                                 prefix: string, cPrefix: string,
+                                 templateParamNames: seq[string],
+                                 cMode: bool): string =
+  ## Generate inline fields from an anonymous struct/union field.
+  ## For `struct { int x; } myfield;` generates:
+  ##   myfield_x*: cint {.importc: "myfield.x".}
+  for nested in field.nestedFields:
+    var fname = nested.name
+    if fname.len == 0 or fname.startsWith("_"):
+      continue
+
+    let fullName = prefix & "_" & cleanIdentifier(fname)
+    let cName = cPrefix & "." & fname
+
+    # Handle recursively nested anonymous structs
+    if nested.nestedFields.len > 0:
+      result.add(gen.generateInlineNestedFields(nested, fullName, cName, templateParamNames, cMode))
+    else:
+      var tname = nested.typeName
+      # For template structs, check if field uses template params
+      var usesTemplateParam = false
+      for tp in templateParamNames:
+        if tp in tname:
+          usesTemplateParam = true
+          break
+      tname = getNimType(tname, gen.rename)
+
+      let importPragma = if cMode: "importc" else: "importcpp"
+      result.add("    " & fullName & "* {." & importPragma & ": \"" & cName & "\".}: " & tname & "\n")
+
+
 proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "",
                      inheritable: bool = false, nofield: bool = false): string =
   ## Generate Nim struct/object declaration.
@@ -612,6 +644,12 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
         continue
 
       fname = cleanIdentifier(fname)
+
+      # Handle anonymous struct/union fields by inlining their nested fields
+      if field.nestedFields.len > 0:
+        result.add(gen.generateInlineNestedFields(field, fname, field.name, templateParamNames, gen.config.cMode))
+        continue
+
       var tname = field.typeName
 
       # For template structs, check if field uses template params
@@ -667,9 +705,11 @@ proc generateClass*(gen: NimCodeGenerator, cls: ClassDecl, incl: string = "",
     inheritance = " of RootObj"
 
   var templateStr = ""
+  var templateParamNames: seq[string]
   if cls.templateParams.len > 0:
     var params: seq[string]
     for p in cls.templateParams:
+      templateParamNames.add(p.name)
       if p.typeName.isSome:
         # Non-type parameter (e.g., int N)
         params.add(p.name & ": static " & getNimType(p.typeName.get, gen.rename))
@@ -692,6 +732,12 @@ proc generateClass*(gen: NimCodeGenerator, cls: ClassDecl, incl: string = "",
         continue
 
       fname = cleanIdentifier(fname)
+
+      # Handle anonymous struct/union fields by inlining their nested fields
+      if field.nestedFields.len > 0:
+        result.add(gen.generateInlineNestedFields(field, fname, field.name, templateParamNames, gen.config.cMode))
+        continue
+
       let tname = getNimType(field.typeName, gen.rename)
 
       if fname.endsWith("_"):
@@ -919,11 +965,11 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
 
         result = gen.generateStruct(structData, incl)
 
-        # If typedef name differs from struct name (after stripping), generate an alias
-        # Skip alias if names match after stripping (e.g., mjData_ -> mjData matches typedef mjData)
-        if typedef.name != structData.name and typedef.name.len > 0:
-          let aliasName = cleanIdentifier(typedef.name)
-          let structName = cleanIdentifier(structData.name)
+        # If typedef name differs from struct name (after cleaning), generate an alias
+        # Skip alias if names match after cleanIdentifier (e.g., mjData_ -> mjData matches typedef mjData)
+        let aliasName = cleanIdentifier(typedef.name)
+        let structName = cleanIdentifier(structData.name)
+        if aliasName != structName and aliasName.len > 0:
           let importPragma = if gen.config.cMode: "importc" else: "importcpp"
           let includePragma = if incl.len > 0: "header: \"" & incl & "\", " else: ""
           result.add("  " & aliasName & "* {." & includePragma & importPragma & ": \"" & typedef.fullyQualified & "\".} = " & structName & "\n")
