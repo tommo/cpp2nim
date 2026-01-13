@@ -2,3 +2,4 @@ _build/
 bin/
 *.exe
 nimcache/
+src/cpp2nim_cli
