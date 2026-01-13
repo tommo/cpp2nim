@@ -897,12 +897,13 @@ proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
 
   methodName = cleanIdentifier(methodName)
 
-  # Detect template parameters from the signature
-  let fullSig = paramsStr & " " & returnStr
-  let templateParams = detectTemplateParams(fullSig)
+  # Detect template parameters from the signature (C++ only - C has no templates)
   var templateStr = ""
-  if templateParams.len > 0:
-    templateStr = "[" & templateParams.join(", ") & "]"
+  if not gen.config.cMode:
+    let fullSig = paramsStr & " " & returnStr
+    let templateParams = detectTemplateParams(fullSig)
+    if templateParams.len > 0:
+      templateStr = "[" & templateParams.join(", ") & "]"
 
   # Generate proc
   var p: string

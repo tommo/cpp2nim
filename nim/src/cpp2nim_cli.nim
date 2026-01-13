@@ -319,8 +319,13 @@ proc parseArgs(): CliOptions =
         of "version":
           result.command = cmdVersion
         else:
-          result.inputs.add(p.key)
-          result.command = cmdAll  # Default to 'all' if files given without command
+          # Auto-detect config file if first arg is a .json file
+          if p.key.endsWith(".json") and result.configFile.len == 0:
+            result.configFile = p.key
+            result.command = cmdAll
+          else:
+            result.inputs.add(p.key)
+            result.command = cmdAll  # Default to 'all' if files given without command
       else:
         result.inputs.add(p.key)
 
