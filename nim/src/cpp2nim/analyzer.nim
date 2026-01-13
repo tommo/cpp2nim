@@ -3,7 +3,7 @@
 ## Analyzes dependencies between parsed headers and determines which types
 ## should be moved to shared type files.
 
-import std/[sets, tables, options, os, strutils]
+import std/[sets, tables, options, os, strutils, algorithm, sequtils]
 import ./config
 import ./models
 import ./utils
@@ -394,3 +394,76 @@ proc collectSharedObjects*(relationships: Table[string, Table[string, HashSet[st
 
   for t in forceShared:
     result.incl(t)
+
+
+proc topoSortTypes*(entries: seq[SharedTypeEntry]): seq[SharedTypeEntry] =
+  ## Topologically sort types so dependencies come first.
+  ## Generic types come before their instantiations.
+  ## Base classes come before derived classes.
+  var nameToEntry: Table[string, SharedTypeEntry]
+  var inDegree: Table[string, int]
+  var graph: Table[string, seq[string]]  # name -> types that depend on it
+
+  # Build lookup and initialize
+  for entry in entries:
+    nameToEntry[entry.name] = entry
+    inDegree[entry.name] = 0
+    graph[entry.name] = @[]
+
+  # Build dependency graph
+  for entry in entries:
+    for dep in entry.deps:
+      # Check if dep matches any entry (handle namespace stripping)
+      for name in nameToEntry.keys:
+        if name == dep or name.endsWith("::" & dep) or dep.endsWith("::" & name.split("::")[^1]):
+          if name != entry.name:
+            graph[name].add(entry.name)
+            inDegree[entry.name] = inDegree.getOrDefault(entry.name) + 1
+
+  # Kahn's algorithm with priority:
+  # 1. Generic types (isGeneric) first
+  # 2. Base classes second
+  # 3. Then by dependency order
+  var ready: seq[string]
+  for name, degree in inDegree:
+    if degree == 0:
+      ready.add(name)
+
+  # Sort ready queue: generics first, then base classes
+  ready.sort do (a, b: string) -> int:
+    let ea = nameToEntry[a]
+    let eb = nameToEntry[b]
+    if ea.isGeneric != eb.isGeneric:
+      return if ea.isGeneric: -1 else: 1
+    if ea.isBaseClass != eb.isBaseClass:
+      return if ea.isBaseClass: -1 else: 1
+    return cmp(a, b)
+
+  var sortedResult: seq[SharedTypeEntry]
+  while ready.len > 0:
+    let name = ready[0]
+    ready.delete(0)
+    sortedResult.add(nameToEntry[name])
+
+    for dependent in graph.getOrDefault(name):
+      inDegree[dependent] = inDegree[dependent] - 1
+      if inDegree[dependent] == 0:
+        # Insert maintaining sort order
+        var inserted = false
+        for i, r in ready:
+          let er = nameToEntry[r]
+          let ed = nameToEntry[dependent]
+          if (ed.isGeneric and not er.isGeneric) or
+             (ed.isBaseClass and not er.isBaseClass and not er.isGeneric):
+            ready.insert(dependent, i)
+            inserted = true
+            break
+        if not inserted:
+          ready.add(dependent)
+
+  # Add any remaining (cycles) at the end
+  for entry in entries:
+    if entry.name notin sortedResult.mapIt(it.name):
+      sortedResult.add(entry)
+
+  return sortedResult

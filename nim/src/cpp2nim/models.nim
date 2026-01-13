@@ -213,6 +213,23 @@ type
     allProvides*: Table[string, HashSet[string]]
     allMissing*: Table[string, HashSet[string]]
 
+  SharedTypeEntry* = object
+    ## Entry for a shared type with its dependencies for topological sorting.
+    ##
+    ## Fields:
+    ##   name: Fully qualified C++ name.
+    ##   deps: Dependencies (types this depends on).
+    ##   kind: Type kind ("enum", "struct", "class", "typedef").
+    ##   code: Generated Nim code.
+    ##   isGeneric: Whether this type has template parameters.
+    ##   isBaseClass: Whether this type is used as a base class.
+    name*: string
+    deps*: seq[string]
+    kind*: string
+    code*: string
+    isGeneric*: bool
+    isBaseClass*: bool
+
 
 # Constructors
 
@@ -294,6 +311,11 @@ proc initParsedHeader*(filename: string): ParsedHeader =
 
 proc initParseResult*(): ParseResult =
   ParseResult()
+
+proc initSharedTypeEntry*(name: string, deps: seq[string] = @[], kind = "",
+                          code = "", isGeneric = false, isBaseClass = false): SharedTypeEntry =
+  SharedTypeEntry(name: name, deps: deps, kind: kind, code: code,
+                  isGeneric: isGeneric, isBaseClass: isBaseClass)
 
 
 # JSON serialization helpers
