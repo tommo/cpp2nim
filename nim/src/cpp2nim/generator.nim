@@ -403,12 +403,10 @@ proc initNimCodeGenerator*(config: Config = defaultConfig(),
   )
 
 proc stripTypeSuffix*(gen: NimCodeGenerator, name: string): string =
-  ## Strip configured suffixes from a type name (C mode only).
+  ## Strip configured suffixes from a type name.
   ## E.g., with strip_type_suffixes: ["_"], "mjData_" becomes "mjData"
-  ## Only applies in C mode to avoid breaking C++ code where underscores may be intentional.
+  ## Note: Trailing underscores are always stripped since Nim doesn't allow them.
   result = name
-  if not gen.config.cMode:
-    return  # Don't strip in C++ mode
   for suffix in gen.config.stripTypeSuffixes:
     if result.endsWith(suffix) and result.len > suffix.len:
       result = result[0 ..< result.len - suffix.len]

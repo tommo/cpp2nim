@@ -43,14 +43,19 @@ proc escapeNimKeyword*(name: string): string =
 proc cleanIdentifier*(name: string): string =
   ## Clean an identifier for Nim output.
   ##
-  ## Handles leading underscores and keyword escaping.
+  ## Handles leading/trailing underscores and keyword escaping.
+  ## Nim doesn't allow trailing underscores in identifiers.
   ##
   ## Example:
   ##   cleanIdentifier("_internal") => "v_internal"
   ##   cleanIdentifier("type") => "`type`"
+  ##   cleanIdentifier("mjData_") => "mjData"
   if name.len == 0:
     return name
   var n = name
+  # Strip trailing underscores (not allowed in Nim)
+  while n.len > 1 and n.endsWith("_"):
+    n = n[0..^2]
   if n.startsWith("_"):
     n = "v_" & n[1..^1]
   result = escapeNimKeyword(n)
