@@ -517,7 +517,11 @@ proc generateEnum*(gen: NimCodeGenerator, enumDecl: EnumDecl, incl: string = "")
     if item.comment.isSome:
       itemsTxt.add(formatComment(item.comment, 6))
 
-  result = "  " & name & "* {.size:sizeof(" & typeSize & "), " & includePragma & "importcpp: \"" & enumDecl.fullyQualified & "\", pure.} = enum\n"
+  let (importPragma, cName) = if gen.config.cMode:
+    ("importc", "enum " & enumDecl.fullyQualified)
+  else:
+    ("importcpp", enumDecl.fullyQualified)
+  result = "  " & name & "* {.size:sizeof(" & typeSize & "), " & includePragma & importPragma & ": \"" & cName & "\", pure.} = enum\n"
   if enumDecl.comment.isSome:
     result.add(formatComment(enumDecl.comment) & "\n")
   result.add(itemsTxt & "\n")
@@ -575,7 +579,11 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
   elif struct.name in gen.baseClasses or struct.fullyQualified in gen.baseClasses:
     inheritance = " of RootObj"
 
-  result = "  " & name & "*" & templateStr & " {." & inheritablePragma & unionPragma & includePragma & incompletePragma & "importcpp: \"" & struct.fullyQualified & "\".} = object" & inheritance & "\n"
+  let (importPragma, cName) = if gen.config.cMode:
+    ("importc", "struct " & struct.fullyQualified)
+  else:
+    ("importcpp", struct.fullyQualified)
+  result = "  " & name & "*" & templateStr & " {." & inheritablePragma & unionPragma & includePragma & incompletePragma & importPragma & ": \"" & cName & "\".} = object" & inheritance & "\n"
 
   # Skip fields for incomplete template structs - they use template params that
   # can't be resolved and these structs are used as opaque types anyway
@@ -877,7 +885,8 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
         let nimType = getNimType(underlying, initTable[string, string]())  # No renames!
         let includePragma = if incl.len > 0: "header: \"" & incl & "\", " else: ""
         let name = cleanIdentifier(typedef.name)
-        return "  " & name & "* {." & includePragma & "importcpp: \"" & typedef.fullyQualified & "\".} = " & nimType & "\n"
+        let importPragma = if gen.config.cMode: "importc" else: "importcpp"
+        return "  " & name & "* {." & includePragma & importPragma & ": \"" & typedef.fullyQualified & "\".} = " & nimType & "\n"
       elif structData.name.len == 0:
         # For anonymous typedef structs, use the typedef name
         structData.name = typedef.name
@@ -908,7 +917,8 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
     let paramsStr = gen.generateParams(typedef.params)
     let procType = "proc (" & paramsStr & ")" & returnStr & " {.cdecl.}"
 
-    return "  " & name & "* {." & includePragma & "importcpp: \"" & typedef.fullyQualified & "\".} = " & procType & "\n"
+    let importPragma = if gen.config.cMode: "importc" else: "importcpp"
+    return "  " & name & "* {." & includePragma & importPragma & ": \"" & typedef.fullyQualified & "\".} = " & procType & "\n"
   else:
     var nt = nimType
     if nt.startsWith("struct "):
@@ -917,7 +927,8 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
     if name == nt:  # Avoid self-reference
       return ""
 
-    return "  " & name & "* {." & includePragma & "importcpp: \"" & typedef.fullyQualified & "\".} = " & nt & "\n"
+    let importPragma = if gen.config.cMode: "importc" else: "importcpp"
+    return "  " & name & "* {." & includePragma & importPragma & ": \"" & typedef.fullyQualified & "\".} = " & nt & "\n"
 
 
 proc generateConst*(gen: NimCodeGenerator, enumDecl: EnumDecl): string =

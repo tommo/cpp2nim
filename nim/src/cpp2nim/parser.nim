@@ -433,19 +433,27 @@ proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
 
   # Post-process: fix function pointer field names where clang returns wrong name
   # This happens for C syntax like: return_type(CALL_CONV* field_name)(params)
+  # Also happens with macros like ORT_API2_STATUS where clang returns garbage
   for i in 0..<fields.len:
     let fieldType = fields[i].typeName
     let name = fields[i].name
-    # Check if field name looks wrong - C type names shouldn't be field names
+    # Check if field name looks wrong:
+    # - C type names (size_t, int, etc.)
+    # - Contains comma (from macro parameter list)
+    # - Contains space (invalid identifier)
+    # - Is empty
+    # - Common parameter names that indicate clang failed to get the real name
     let looksLikeTypeName = name in ["size_t", "int", "void", "char", "short", "long", "unsigned", "signed", "float", "double"] or
                             (name.len > 2 and name.endsWith("_t"))
-    # Check if it's a function pointer type or has suspicious name
-    if "*" in fieldType or looksLikeTypeName:
+    let looksLikeParamName = name in ["out", "env", "options", "logid", "op", "value", "type_info", "custom_op_domain", "library_handle", "run_tag", "log_severity_level", "profile_file_prefix"]
+    let looksInvalid = ',' in name or ' ' in name or name.len == 0
+    # Only try to fix names that actually look wrong - not ALL function pointer types
+    if looksLikeTypeName or looksInvalid or looksLikeParamName:
       # Get source text and try to extract real field name
       let sourceText = getCodeSpan(fieldCursors[i], v.ctx[].fileCache)
       if sourceText.len > 0 and "*" in sourceText and "(" in sourceText:
         let realName = extractFunctionPointerFieldName(sourceText)
-        if realName.len > 0 and realName != name:
+        if realName.len > 0 and realName != name and ',' notin realName and ' ' notin realName:
           fields[i] = initFieldDecl(realName, fieldType, fields[i].isAnonymous)
 
   let spelling = toNimStr(getCursorSpelling(node))
