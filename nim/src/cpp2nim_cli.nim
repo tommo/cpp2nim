@@ -2,8 +2,70 @@
 ##
 ## Command-line interface for generating Nim bindings from C++ headers.
 
-import std/[os, strutils, parseopt, tables, sets, json, times, terminal, options, algorithm, sequtils]
+import std/[os, strutils, parseopt, tables, sets, json, times, terminal, options, algorithm, sequtils, hashes]
 import cpp2nim/[models, config, analyzer, generator, parser, postprocess]
+
+
+# Cache system for lazy reparsing
+type
+  CacheEntry = object
+    parseHash: string      # Hash of headers + parse config
+    genHash: string        # Hash of generation config
+    parsedData: JsonNode   # Cached parsed result
+
+proc hashParseConfig(cfg: Config, headerFiles: seq[string]): string =
+  ## Hash inputs that affect parsing stage.
+  var h: Hash = 0
+  # Hash header file contents
+  for f in headerFiles:
+    if fileExists(f):
+      h = h !& hash(readFile(f))
+      h = h !& hash(f)
+  # Hash parse-related config
+  for p in cfg.searchPaths: h = h !& hash(p)
+  for d in cfg.defines: h = h !& hash(d)
+  for a in cfg.extraArgs: h = h !& hash(a)
+  h = h !& hash(cfg.cMode)
+  for p in cfg.preIncludeHeaders: h = h !& hash(p)
+  for f in cfg.ignoreFiles: h = h !& hash(f)
+  result = $(!$h)
+
+proc hashGenConfig(cfg: Config): string =
+  ## Hash inputs that affect generation stage (but not parsing).
+  var h: Hash = 0
+  h = h !& hash(cfg.camelCase)
+  if cfg.rootNamespace.isSome: h = h !& hash(cfg.rootNamespace.get)
+  for k, v in cfg.typeRenames: h = h !& hash(k & ":" & v)
+  for t in cfg.ignoreTypes: h = h !& hash(t)
+  for f in cfg.ignoreFields: h = h !& hash(f)
+  for t in cfg.inheritableTypes: h = h !& hash(t)
+  for f in cfg.varargsFunctions: h = h !& hash(f)
+  for t in cfg.forceSharedTypes: h = h !& hash(t)
+  for s in cfg.stripTypeSuffixes: h = h !& hash(s)
+  for k, v in cfg.patchFiles: h = h !& hash(k & ":" & v)
+  # Hash post_fixes
+  for rule in cfg.postFixes.rules:
+    h = h !& hash(rule.filePattern)
+    for r in rule.replacements:
+      h = h !& hash(r.pattern & r.replacement & $r.mode)
+  result = $(!$h)
+
+proc loadCache(cacheFile: string): CacheEntry =
+  if fileExists(cacheFile):
+    try:
+      let j = parseJson(readFile(cacheFile))
+      result.parseHash = j{"parse_hash"}.getStr("")
+      result.genHash = j{"gen_hash"}.getStr("")
+      result.parsedData = j{"parsed_data"}
+    except: discard
+
+proc saveCache(cacheFile: string, entry: CacheEntry) =
+  let j = %*{
+    "parse_hash": entry.parseHash,
+    "gen_hash": entry.genHash,
+    "parsed_data": entry.parsedData
+  }
+  writeFile(cacheFile, $j)
 
 
 proc applyPatchFile(code: string, outputPath: string, cfg: Config, configDir: string): string =
@@ -111,44 +173,84 @@ const
 cpp2nim - C++ to Nim binding generator
 
 Usage:
-  cpp2nim <command> [options] [inputs...]
+  cpp2nim [config.json] [options]           Run with config file (recommended)
+  cpp2nim <command> [options] [inputs...]   Run specific command
 
 Commands:
-  parse       Parse C++ headers to JSON
-  analyze     Analyze dependencies between headers
-  generate    Generate Nim bindings from parsed JSON
-  all         Run complete pipeline (parse + analyze + generate)
+  all         Run complete pipeline (default if config.json provided)
+  init        Create example cpp2nim.json config file
+  parse       Parse C++ headers to JSON (advanced)
+  analyze     Analyze dependencies (advanced)
+  generate    Generate from parsed JSON (advanced)
   help        Show this help message
-  version     Show version
 
 Options:
   -c, --config=FILE     Load configuration from JSON file
   -o, --output=DIR      Output directory (default: current dir)
-  -I, --include=PATH    Add include search path (can be repeated)
-  -D, --define=MACRO    Add preprocessor define (can be repeated)
+  -I, --include=PATH    Add include search path
+  -D, --define=MACRO    Add preprocessor define
   -v, --verbose         Enable verbose output
   -q, --quiet           Suppress non-error output
   --c-mode              Parse as C instead of C++
   --no-camel            Disable camelCase conversion
   --namespace=NS        Root namespace to strip
-  --rename=OLD:NEW      Add type rename (can be repeated)
-  --ignore-type=TYPE    Ignore type (can be repeated)
-  --ignore-file=FILE    Ignore file pattern (can be repeated)
-  --parallel            Enable parallel parsing
-  --workers=N           Number of parallel workers
-  -f, --force           Force regeneration even if outputs are up to date
+  -f, --force           Force regeneration
+
+Quick Start:
+  1. Create config:    cpp2nim init
+  2. Edit cpp2nim.json with your headers and options
+  3. Generate:         cpp2nim cpp2nim.json
 
 Examples:
-  cpp2nim parse -I/usr/include mylib/*.h -o parsed.json
-  cpp2nim analyze parsed.json -o analysis.json
-  cpp2nim generate parsed.json analysis.json -o bindings/
-  cpp2nim all -I/usr/include -o bindings/ mylib/*.h
-  cpp2nim all --config=cpp2nim.json mylib/*.h
+  cpp2nim cpp2nim.json                  # Use config file (recommended)
+  cpp2nim cpp2nim.json --force          # Force regenerate
+  cpp2nim mylib/*.h -o src/ --c-mode    # Direct CLI usage
+"""
+
+  ProjectStructureHelp = """
+Recommended Project Structure:
+  myproject/
+  ├── cpp2nim.json          # Config file (run: cpp2nim init)
+  ├── myproject.nimble      # Nim package file
+  ├── src/
+  │   ├── myproject.nim     # Main module (re-exports bindings)
+  │   ├── shared_types.nim  # [generated] Types used across files
+  │   ├── header1.nim       # [generated] Bindings for header1.h
+  │   └── header2.nim       # [generated] Bindings for header2.h
+  └── vendor/               # C/C++ library headers/sources
+
+Example myproject.nim (main module):
+  import ./shared_types
+  export shared_types
+  import ./header1, ./header2
+  export header1, header2
+
+Example cpp2nim.json:
+  {
+    "headers": ["vendor/mylib/include/*.h"],
+    "output_dir": "src",
+    "search_paths": ["vendor/mylib/include"],
+    "c_mode": true
+  }
+"""
+
+  ExampleConfig = """{
+  "headers": ["vendor/include/*.h"],
+  "output_dir": "src",
+  "search_paths": ["vendor/include"],
+  "c_mode": false,
+  "camel_case": true,
+  "defines": [],
+  "ignore_files": [],
+  "ignore_types": [],
+  "type_renames": {},
+  "post_fixes": {}
+}
 """
 
 type
   Command = enum
-    cmdNone, cmdParse, cmdAnalyze, cmdGenerate, cmdAll, cmdHelp, cmdVersion
+    cmdNone, cmdParse, cmdAnalyze, cmdGenerate, cmdAll, cmdHelp, cmdVersion, cmdInit
 
   CliOptions = object
     command: Command
@@ -314,6 +416,8 @@ proc parseArgs(): CliOptions =
           result.command = cmdGenerate
         of "all":
           result.command = cmdAll
+        of "init":
+          result.command = cmdInit
         of "help":
           result.command = cmdHelp
         of "version":
@@ -578,26 +682,42 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
     return 1
 
   let outputDir = if cfg.outputDir != ".": cfg.outputDir else: "."
+  let cacheFile = outputDir / ".cpp2nim_cache.json"
 
-  # Check if regeneration is needed (unless --force is specified)
-  if not opts.force and not needsRegeneration(files, opts.configFile, outputDir):
-    logSuccess("Outputs are up to date (use --force to regenerate)")
-    return 0
+  # Compute hashes for cache invalidation
+  let parseHash = hashParseConfig(cfg, files)
+  let genHash = hashGenConfig(cfg)
+  var cache = loadCache(cacheFile)
+
+  # Check if everything is up to date
+  if not opts.force and cache.parseHash == parseHash and cache.genHash == genHash:
+    if not needsRegeneration(files, opts.configFile, outputDir):
+      logSuccess("Outputs are up to date (use --force to regenerate)")
+      return 0
 
   let startTime = cpuTime()
   opts.log("Running cpp2nim pipeline on " & $files.len & " file(s)...")
 
-  # Step 1: Parse
-  opts.log("\n[1/3] Parsing headers...")
-  let p = initCppHeaderParser(cfg)
-  var parseResult = initParseResult()
-  for file in files:
-    opts.logVerbose("Parsing: " & file)
-    let header = p.parseFile(file)
-    parseResult.headers[file] = header
-    parseResult.allDependencies[file] = header.dependencies
-    parseResult.allProvides[file] = header.provides
-    parseResult.allMissing[file] = header.missing
+  var parseResult: ParseResult
+
+  # Step 1: Parse (skip if parse hash matches and cache exists)
+  if cache.parseHash == parseHash and cache.parsedData != nil and not opts.force:
+    opts.log("\n[1/3] Using cached parse results...")
+    parseResult = toParseResult(cache.parsedData)
+  else:
+    opts.log("\n[1/3] Parsing headers...")
+    let p = initCppHeaderParser(cfg)
+    parseResult = initParseResult()
+    for file in files:
+      opts.logVerbose("Parsing: " & file)
+      let header = p.parseFile(file)
+      parseResult.headers[file] = header
+      parseResult.allDependencies[file] = header.dependencies
+      parseResult.allProvides[file] = header.provides
+      parseResult.allMissing[file] = header.missing
+    # Update cache
+    cache.parseHash = parseHash
+    cache.parsedData = %parseResult
 
   # Step 2: Analyze
   opts.log("\n[2/3] Analyzing dependencies...")
@@ -833,10 +953,31 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
     opts.logVerbose("Generated: " & outputPath)
     inc filesGenerated
 
+  # Save cache
+  cache.genHash = genHash
+  saveCache(cacheFile, cache)
+
   let elapsed = cpuTime() - startTime
   opts.log("")
   logSuccess("Pipeline complete in " & formatFloat(elapsed, ffDecimal, 2) & "s")
   logSuccess("Generated " & $filesGenerated & " binding file(s) in " & outputDir)
+
+  # Show helpful tips for first-time users
+  if not opts.quiet and filesGenerated > 0:
+    let sharedExists = fileExists(outputDir / "shared_types.nim")
+    echo ""
+    echo "Tip: Create a main module to re-export bindings:"
+    echo "  # " & outputDir & "/mylib.nim"
+    if sharedExists:
+      echo "  import ./shared_types"
+      echo "  export shared_types"
+    for filename, _ in parseResult.headers:
+      let modName = extractFilename(filename).changeFileExt("")
+      echo "  import ./" & modName
+      echo "  export " & modName
+      break  # Just show one example
+    if parseResult.headers.len > 1:
+      echo "  # ... (import/export other modules)"
   return 0
 
 
@@ -846,10 +987,26 @@ proc main(): int =
   case opts.command
   of cmdHelp:
     echo Usage
+    echo ProjectStructureHelp
     return 0
 
   of cmdVersion:
     echo "cpp2nim version ", Version
+    return 0
+
+  of cmdInit:
+    let configPath = "cpp2nim.json"
+    if fileExists(configPath):
+      logError(configPath & " already exists. Remove it first or edit manually.")
+      return 1
+    writeFile(configPath, ExampleConfig)
+    logSuccess("Created " & configPath)
+    echo ""
+    echo "Next steps:"
+    echo "  1. Edit cpp2nim.json with your headers and paths"
+    echo "  2. Run: cpp2nim cpp2nim.json"
+    echo ""
+    echo ProjectStructureHelp
     return 0
 
   of cmdNone, cmdParse, cmdAnalyze, cmdGenerate, cmdAll:
