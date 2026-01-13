@@ -992,7 +992,12 @@ proc parseSingleFile(filename: string, config: Config): ParsedHeader =
     argStrings.add("-I" & path)
 
   # Force-include headers (for C libs with typedef dependencies across headers)
+  # Skip pre-including the target file itself to avoid duplicate declaration issues
+  let targetBasename = extractFilename(filename)
   for header in config.preIncludeHeaders:
+    let headerBasename = extractFilename(header)
+    if headerBasename == targetBasename:
+      continue  # Don't pre-include the file we're about to parse
     argStrings.add("-include")
     argStrings.add(header)
 
