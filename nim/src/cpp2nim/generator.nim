@@ -402,6 +402,15 @@ proc initNimCodeGenerator*(config: Config = defaultConfig(),
     ignoreTypes: ignoreSet
   )
 
+proc stripTypeSuffix*(gen: NimCodeGenerator, name: string): string =
+  ## Strip configured suffixes from a type name.
+  ## E.g., with strip_type_suffixes: ["_"], "mjData_" becomes "mjData"
+  result = name
+  for suffix in gen.config.stripTypeSuffixes:
+    if result.endsWith(suffix) and result.len > suffix.len:
+      result = result[0 ..< result.len - suffix.len]
+      return  # Only strip one suffix
+
 proc shouldBeInheritable*(gen: NimCodeGenerator, typeName: string): bool =
   ## Check if a type should have the `inheritable` pragma based on config.
   let baseName = typeName.split("::")[^1]
@@ -896,9 +905,21 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
         return gen.generateStruct(structData, incl)
       else:
         # Regular struct typedef - generate the struct
+        # Apply suffix stripping to struct name (e.g., mjData_ -> mjData)
+        let strippedStructName = gen.stripTypeSuffix(structData.name)
+        if strippedStructName != structData.name:
+          structData.name = strippedStructName
+          # Also update fullyQualified if it ends with the same suffix
+          let fqParts = structData.fullyQualified.rsplit("::", maxsplit=1)
+          if fqParts.len == 2:
+            structData.fullyQualified = fqParts[0] & "::" & strippedStructName
+          else:
+            structData.fullyQualified = strippedStructName
+
         result = gen.generateStruct(structData, incl)
-        # If typedef name differs from struct name, also generate an alias
-        # e.g., typedef struct mjData_ mjData; -> mjData* = mjData_
+
+        # If typedef name differs from struct name (after stripping), generate an alias
+        # Skip alias if names match after stripping (e.g., mjData_ -> mjData matches typedef mjData)
         if typedef.name != structData.name and typedef.name.len > 0:
           let aliasName = cleanIdentifier(typedef.name)
           let structName = cleanIdentifier(structData.name)

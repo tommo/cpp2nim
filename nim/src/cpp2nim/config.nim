@@ -40,6 +40,7 @@ type
     inheritableTypes*: seq[string]       ## Types marked as inheritable
     varargsFunctions*: seq[string]       ## Functions to mark as varargs
     forceSharedTypes*: seq[string]       ## Types to force into shared types file
+    stripTypeSuffixes*: seq[string]      ## Suffixes to strip from type names (e.g., ["_", "_t", "_s"])
 
     # Performance
     parallel*: bool          ## Enable parallel parsing
@@ -68,6 +69,7 @@ proc initConfig*(
   inheritableTypes: seq[string] = @[],
   varargsFunctions: seq[string] = @[],
   forceSharedTypes: seq[string] = @[],
+  stripTypeSuffixes: seq[string] = @[],
   parallel = true,
   numWorkers = none(int),
   postFixes = initPostProcessor(),
@@ -92,6 +94,7 @@ proc initConfig*(
     inheritableTypes: inheritableTypes,
     varargsFunctions: varargsFunctions,
     forceSharedTypes: forceSharedTypes,
+    stripTypeSuffixes: stripTypeSuffixes,
     parallel: parallel,
     numWorkers: numWorkers,
     postFixes: postFixes,
@@ -149,6 +152,7 @@ proc `%`*(c: Config): JsonNode =
     "inheritable_types": c.inheritableTypes,
     "varargs_functions": c.varargsFunctions,
     "force_shared_types": c.forceSharedTypes,
+    "strip_type_suffixes": c.stripTypeSuffixes,
     "parallel": c.parallel,
     "num_workers": optIntToJson(c.numWorkers)
   }
@@ -214,6 +218,7 @@ proc toConfig*(node: JsonNode): Config =
     "inheritable_types", "inheritableTypes",
     "varargs_functions", "varargsFunctions",
     "force_shared_types", "forceSharedTypes",
+    "strip_type_suffixes", "stripTypeSuffixes",
     "parallel",
     "num_workers", "numWorkers",
     "post_fixes", "postFixes",
@@ -258,6 +263,7 @@ proc toConfig*(node: JsonNode): Config =
   let inheritableTypes = node.getStrSeqWithAlias("inheritable_types", "inheritableTypes")
   let varargsFunctions = node.getStrSeqWithAlias("varargs_functions", "varargsFunctions")
   let forceSharedTypes = node.getStrSeqWithAlias("force_shared_types", "forceSharedTypes")
+  let stripTypeSuffixes = node.getStrSeqWithAlias("strip_type_suffixes", "stripTypeSuffixes")
   let postFixes = parsePostFixes(node)
 
   # Parse patch_files: {"output_file.nim": "patch_file.nim"}
@@ -285,6 +291,7 @@ proc toConfig*(node: JsonNode): Config =
     inheritableTypes: inheritableTypes,
     varargsFunctions: varargsFunctions,
     forceSharedTypes: forceSharedTypes,
+    stripTypeSuffixes: stripTypeSuffixes,
     parallel: node{"parallel"}.getBool(true),
     numWorkers: jsonToOptInt(node.getWithAlias("num_workers", "numWorkers")),
     postFixes: postFixes,
@@ -323,6 +330,7 @@ proc mergeWith*(self, other: Config): Config =
     inheritableTypes: self.inheritableTypes & other.inheritableTypes,
     varargsFunctions: self.varargsFunctions & other.varargsFunctions,
     forceSharedTypes: self.forceSharedTypes & other.forceSharedTypes,
+    stripTypeSuffixes: self.stripTypeSuffixes & other.stripTypeSuffixes,
     parallel: other.parallel,
     numWorkers: if other.numWorkers.isSome: other.numWorkers else: self.numWorkers,
     postFixes: PostProcessor(rules: self.postFixes.rules & other.postFixes.rules),

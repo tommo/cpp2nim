@@ -619,6 +619,24 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
         if underlyingNim != nimName:
           renames[underlyingNim] = nimName
 
+  # Add suffix-stripped type renames (e.g., mjData_ -> mjData)
+  # This ensures field types and other references use the stripped name
+  for suffix in cfg.stripTypeSuffixes:
+    for filename, header in parseResult.headers:
+      for typedef in header.typedefs:
+        if typedef.structData.isSome:
+          let structName = typedef.structData.get.name
+          if structName.endsWith(suffix) and structName.len > suffix.len:
+            let strippedName = structName[0 ..< structName.len - suffix.len]
+            # Map original name to stripped name for type lookups
+            renames[structName] = strippedName
+            renames[typedef.structData.get.fullyQualified] = strippedName
+      for s in header.structs:
+        if s.name.endsWith(suffix) and s.name.len > suffix.len:
+          let strippedName = s.name[0 ..< s.name.len - suffix.len]
+          renames[s.name] = strippedName
+          renames[s.fullyQualified] = strippedName
+
   # Step 3: Generate
   opts.log("\n[3/3] Generating bindings...")
   opts.logVerbose("Base classes: " & $analysis.baseClasses.len)
