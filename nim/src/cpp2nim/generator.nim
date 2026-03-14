@@ -808,7 +808,8 @@ proc detectTemplateParams(signature: string): seq[string] =
   result = found.toSeq.sorted
 
 proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
-                     visited: var HashSet[string], varargs: seq[string] = @[]): string =
+                     visited: var HashSet[string], varargs: seq[string] = @[],
+                     incl: string = ""): string =
   ## Generate Nim method/proc declaration.
   # Skip methods with ignored types in parameters or return type
   for param in meth.params:

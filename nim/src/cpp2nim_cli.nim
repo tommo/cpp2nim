@@ -479,16 +479,24 @@ proc generatePerFileBindings(parseResult: ParseResult, analysis: AnalysisResult,
       code.add(typeCode)
       code.add("\n")
 
-    # Collect procs
+    # Collect procs (wrapped in push/pop header pragma)
+    var procCode = ""
     var visited: HashSet[string]
     for m in header.methods:
       let methodCode = gen.generateMethod(m, visited, cfg.varargsFunctions)
       if methodCode.len > 0:
-        code.add(methodCode)
+        procCode.add(methodCode)
 
     var dupTracker: Table[string, bool]
     for c in header.constructors:
-      code.add(gen.generateConstructor(c, dupTracker))
+      procCode.add(gen.generateConstructor(c, dupTracker))
+
+    if procCode.len > 0 and incl.len > 0:
+      code.add("{.push header: \"" & incl & "\".}\n\n")
+      code.add(procCode)
+      code.add("{.pop.}  # header: \"" & incl & "\"\n\n")
+    elif procCode.len > 0:
+      code.add(procCode)
 
     # Collect constants
     var constCode = ""
@@ -653,15 +661,23 @@ proc cmdGenerateBindings(opts: CliOptions, cfg: Config): int =
     for t in header.typedefs:
       code.add(gen.generateTypedef(t, incl))
 
+    var procCode = ""
     var visited: HashSet[string]
     for m in header.methods:
       let methodCode = gen.generateMethod(m, visited, cfg.varargsFunctions)
       if methodCode.len > 0:
-        code.add(methodCode)
+        procCode.add(methodCode)
 
     var dupTracker: Table[string, bool]
     for c in header.constructors:
-      code.add(gen.generateConstructor(c, dupTracker))
+      procCode.add(gen.generateConstructor(c, dupTracker))
+
+    if procCode.len > 0 and incl.len > 0:
+      code.add("{.push header: \"" & incl & "\".}\n\n")
+      code.add(procCode)
+      code.add("{.pop.}  # header: \"" & incl & "\"\n\n")
+    elif procCode.len > 0:
+      code.add(procCode)
 
     for c in header.constants:
       code.add(gen.generateConst(c))
