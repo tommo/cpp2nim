@@ -397,9 +397,10 @@ proc collectSharedTypeEntries(parseResult: ParseResult, analysis: AnalysisResult
           ))
 
 proc generateSharedTypesFile(entries: seq[SharedTypeEntry], outputDir: string,
-                              cfg: Config, configDir: string, opts: CliOptions): int =
+                              cfg: Config, configDir: string, opts: CliOptions,
+                              forceGenerate: bool = false): int =
   ## Generate shared_types.nim file. Returns 1 if file was generated.
-  if entries.len == 0:
+  if entries.len == 0 and not forceGenerate:
     return 0
 
   let sharedPath = outputDir / "shared_types.nim"
@@ -424,7 +425,8 @@ proc generateSharedTypesFile(entries: seq[SharedTypeEntry], outputDir: string,
 proc generatePerFileBindings(parseResult: ParseResult, analysis: AnalysisResult,
                               gen: NimCodeGenerator, cfg: Config,
                               configDir: string, outputDir: string,
-                              opts: CliOptions): int =
+                              opts: CliOptions,
+                              hasSharedTypesFile: bool = false): int =
   ## Generate individual binding files. Returns count of files generated.
   var filesGenerated = 0
 
@@ -437,7 +439,7 @@ proc generatePerFileBindings(parseResult: ParseResult, analysis: AnalysisResult,
 
     # Add imports
     var imports: seq[string]
-    if analysis.sharedTypes.len > 0:
+    if hasSharedTypesFile:
       imports.add("shared_types")
     if filename in analysis.importGraph:
       for imp in analysis.importGraph[filename]:
@@ -446,8 +448,8 @@ proc generatePerFileBindings(parseResult: ParseResult, analysis: AnalysisResult,
     if imports.len > 0:
       code.add("import " & imports.join(", ") & "\n\n")
 
-    # Helper types (only if no shared_types)
-    if analysis.sharedTypes.len == 0:
+    # Helper types (only if no shared_types file exists)
+    if not hasSharedTypesFile:
       code.add("type\n")
       code.add(HelperTypes)
       code.add("\n")
@@ -750,12 +752,14 @@ proc cmdRunAll(opts: CliOptions, cfg: Config): int =
 
   var filesGenerated = 0
 
-  # Generate shared_types.nim
+  # Generate shared_types.nim (always for multi-file projects to avoid duplicate helper types)
   let entries = collectSharedTypeEntries(parseResult, analysis, gen, cfg, opts)
-  filesGenerated += generateSharedTypesFile(entries, outputDir, cfg, configDir, opts)
+  let isMultiFile = parseResult.headers.len > 1
+  filesGenerated += generateSharedTypesFile(entries, outputDir, cfg, configDir, opts, forceGenerate = isMultiFile)
+  let hasSharedTypesFile = filesGenerated > 0
 
   # Generate per-file bindings
-  filesGenerated += generatePerFileBindings(parseResult, analysis, gen, cfg, configDir, outputDir, opts)
+  filesGenerated += generatePerFileBindings(parseResult, analysis, gen, cfg, configDir, outputDir, opts, hasSharedTypesFile)
 
   # Save cache
   cacheEntry.genHash = genHash

@@ -438,7 +438,9 @@ proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
       # Check if the field's TYPE is an anonymous struct/union
       let typeDecl = getTypeDeclaration(getCursorType(cursor))
       let isAnon = Cursor_isAnonymous(typeDecl) != 0
-      data.fields[].add(initFieldDecl(fieldName, fieldType, isAnon))
+      let fieldSize = Type_getSizeOf(getCursorType(cursor))
+      let sizeBytes = if fieldSize >= 0: int(fieldSize) else: 0
+      data.fields[].add(initFieldDecl(fieldName, fieldType, isAnon, sizeBytes = sizeBytes))
       data.fieldCursors[].add(cursor)
       data.deps[].add(getTemplateDependencies(fieldType))
     else:
@@ -785,9 +787,19 @@ proc visitTypedefDecl(v: var CppAstVisitor, node: CXCursor) =
 
       discard visitChildren(inner, enumChildVisitor2, addr items)
 
+      let innerName = toNimStr(getCursorSpelling(inner))
+      # Use typedef name for anonymous enums (common C pattern: typedef type name; enum { ... };)
+      let enumName = if innerName == "" or innerName.startsWith("(unnamed") or innerName.startsWith("(anonymous"):
+          spelling
+        else:
+          innerName
+      let enumFQ = if enumName == spelling:
+          getFullyQualifiedName(node)
+        else:
+          getFullyQualifiedName(inner)
       enumData = some(initEnumDecl(
-        name = toNimStr(getCursorSpelling(inner)),
-        fullyQualified = getFullyQualifiedName(inner),
+        name = enumName,
+        fullyQualified = enumFQ,
         underlyingType = toNimStr(getTypeSpelling(getEnumDeclIntegerType(inner))),
         items = items,
         comment = none(string)

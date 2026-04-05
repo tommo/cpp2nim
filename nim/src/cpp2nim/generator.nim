@@ -507,9 +507,12 @@ proc generateEnum*(gen: NimCodeGenerator, enumDecl: EnumDecl, incl: string = "")
   var name = gen.rename.getOrDefault(enumDecl.fullyQualified, enumDecl.name.split("::")[ ^1])
   name = cleanIdentifier(name)
 
+  # Skip enums with unusable names (anonymous enums that weren't resolved)
+  if name.contains("(unnamed") or name.contains("(anonymous"):
+    return ""
+
   let includePragma = if incl.len > 0: "header: \"" & incl & "\", " else: ""
   let typeSize = getNimType(enumDecl.underlyingType, gen.rename)
-  let typePragma = "size:sizeof(" & typeSize & ")"
 
   # Sort items by value
   var items = enumDecl.items.sorted(proc(a, b: EnumItem): int = cmp(a.value, b.value))
@@ -527,11 +530,17 @@ proc generateEnum*(gen: NimCodeGenerator, enumDecl: EnumDecl, incl: string = "")
     if item.comment.isSome:
       itemsTxt.add(formatComment(item.comment, 6))
 
-  let (importPragma, cName) = if gen.config.cMode:
-    ("importc", "enum " & enumDecl.fullyQualified)
+  # Skip importc for anonymous enums (no valid C tag name)
+  let isAnonymous = enumDecl.fullyQualified.contains("(unnamed") or
+                    enumDecl.fullyQualified.contains("(anonymous")
+  let importPragmaStr = if isAnonymous:
+    ""
+  elif gen.config.cMode:
+    "importc: \"enum " & enumDecl.fullyQualified & "\", "
   else:
-    ("importcpp", enumDecl.fullyQualified)
-  result = "  " & name & "* {.size:sizeof(" & typeSize & "), " & includePragma & importPragma & ": \"" & cName & "\", pure.} = enum\n"
+    "importcpp: \"" & enumDecl.fullyQualified & "\", "
+
+  result = "  " & name & "* {.size:sizeof(" & typeSize & "), " & includePragma & importPragmaStr & "pure.} = enum\n"
   if enumDecl.comment.isSome:
     result.add(formatComment(enumDecl.comment) & "\n")
   result.add(itemsTxt & "\n")
@@ -621,8 +630,9 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
   elif struct.name in gen.baseClasses or struct.fullyQualified in gen.baseClasses:
     inheritance = " of RootObj"
 
+  let cPrefix = if struct.isUnion: "union " else: "struct "
   let (importPragma, cName) = if gen.config.cMode:
-    ("importc", "struct " & struct.fullyQualified)
+    ("importc", cPrefix & struct.fullyQualified)
   else:
     ("importcpp", struct.fullyQualified)
   result = "  " & name & "*" & templateStr & " {." & inheritablePragma & unionPragma & includePragma & incompletePragma & importPragma & ": \"" & cName & "\".} = object" & inheritance & "\n"
@@ -633,14 +643,20 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
     return
 
   if not nofield:
+    var paddingIdx = 0
     for field in struct.fields:
       var fname = field.name
       if fname.len == 0 or fname.startsWith("_"):
         continue
       if field.typeName.startsWith("struct "):
         continue
-      # Skip fields with ignored types
+      # Generate padding for fields with ignored types to maintain ABI compatibility
       if gen.shouldIgnoreType(field.typeName):
+        if field.sizeBytes > 0:
+          result.add("    padding" & $paddingIdx & "*: array[" & $field.sizeBytes & ", byte]\n")
+          inc paddingIdx
+        else:
+          result.add("    # WARNING: field '" & field.name & "' skipped (type ignored), sizeof unknown\n")
         continue
 
       fname = cleanIdentifier(fname)
@@ -721,14 +737,20 @@ proc generateClass*(gen: NimCodeGenerator, cls: ClassDecl, incl: string = "",
   result = "  " & name & "*" & templateStr & " {." & inheritablePragma & includePragma & "importcpp: \"" & cls.fullyQualified & "\"" & byrefPragma & ".} = object" & inheritance & "\n"
 
   if not nofield:
+    var paddingIdx = 0
     for field in cls.fields:
       var fname = field.name
       if fname.len == 0 or fname.startsWith("_"):
         continue
       if field.typeName.startsWith("struct "):
         continue
-      # Skip fields with ignored types
+      # Generate padding for fields with ignored types to maintain ABI compatibility
       if gen.shouldIgnoreType(field.typeName):
+        if field.sizeBytes > 0:
+          result.add("    padding" & $paddingIdx & "*: array[" & $field.sizeBytes & ", byte]\n")
+          inc paddingIdx
+        else:
+          result.add("    # WARNING: field '" & field.name & "' skipped (type ignored), sizeof unknown\n")
         continue
 
       fname = cleanIdentifier(fname)
@@ -818,9 +840,9 @@ proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
   if gen.shouldIgnoreType(meth.returnType):
     return ""
 
-  # Method name (lowercase first letter)
+  # Method name (lowercase first letter only when camelCase is enabled)
   var methodName = meth.name
-  if methodName.len > 0:
+  if methodName.len > 0 and gen.config.camelCase:
     methodName = methodName[0].toLowerAscii() & methodName[1..^1]
 
   # Handle varargs
@@ -1009,6 +1031,11 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
       return ""
 
     let importPragma = if gen.config.cMode: "importc" else: "importcpp"
+
+    # typedef void generates an opaque object type instead of invalid `= void`
+    if nt == "void":
+      return "  " & name & "* {.incompleteStruct, " & includePragma & importPragma & ": \"" & typedef.fullyQualified & "\".} = object\n"
+
     return "  " & name & "* {." & includePragma & importPragma & ": \"" & typedef.fullyQualified & "\".} = " & nt & "\n"
 
 

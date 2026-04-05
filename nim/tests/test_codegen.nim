@@ -4,7 +4,7 @@
 ## Requires libclang. Run with:
 ##   nim c -d:useLibclang -r tests/test_codegen.nim
 
-import std/[unittest, os, sets, tables, osproc, times, streams]
+import std/[unittest, os, sets, tables, osproc, times, streams, strutils]
 import ../src/cpp2nim/[parser, models, config, generator]
 
 const FixturesDir = currentSourcePath().parentDir / "fixtures"
@@ -119,6 +119,124 @@ suite "Code Generation - nim check validation":
       check nimCheck(code, "input")
     else:
       skip()
+
+
+suite "Bug fixes - output validation":
+  test "Bug 1: typedef void generates opaque object, not = void":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let code = generateCode(header, cfg, "sample_c_bugfixes.h")
+    # Should contain incompleteStruct and = object, not = void
+    check "incompleteStruct" in code
+    check "= object" in code
+    check "= void" notin code
+    check nimCheck(code, "bug1_typedef_void")
+
+  test "Bug 2: union importc uses 'union' not 'struct' (C mode)":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    let incl = "sample_c_bugfixes.h"
+    for s in header.structs:
+      if s.isUnion:
+        let code = gen.generateStruct(s, incl)
+        check "importc: \"union " in code
+        check "importc: \"struct " notin code
+
+  test "Bug 3: camelCase=false preserves first character":
+    var cfg = defaultConfig()
+    cfg.camelCase = false
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    var visited: HashSet[string]
+    for m in header.methods:
+      if m.name == "MYLIB_doSomething":
+        let code = gen.generateMethod(m, visited, @[])
+        # First char should be preserved when camelCase is false
+        check "proc MYLIB_doSomething" in code
+        check "proc mYLIB_doSomething" notin code
+
+  test "Bug 3: camelCase=true lowercases first character":
+    var cfg = defaultConfig()
+    cfg.camelCase = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    var visited: HashSet[string]
+    for m in header.methods:
+      if m.name == "myFunc":
+        let code = gen.generateMethod(m, visited, @[])
+        check "proc myFunc" in code
+
+  test "Bug 4: anonymous enum names are skipped (not invalid identifiers)":
+    let cfg = defaultConfig()
+    let gen = initNimCodeGenerator(cfg)
+    # Simulate an anonymous enum that wasn't resolved
+    let badEnum = initEnumDecl(
+      "(unnamed at test.h:10:1)", "(unnamed at test.h:10:1)", "unsigned int",
+      @[initEnumItem("VAL_A", 1), initEnumItem("VAL_B", 2)])
+    let code = gen.generateEnum(badEnum)
+    # Should produce empty output for unresolvable anonymous enums
+    check code == ""
+
+  test "Bug 4/Feature A: anonymous enum inside typedef gets typedef name":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let gen = initNimCodeGenerator(cfg)
+    # Simulate a resolved anonymous enum (name inherited from typedef)
+    let resolvedEnum = initEnumDecl(
+      "RGFW_key", "RGFW_key", "unsigned char",
+      @[initEnumItem("RGFW_keyA", 97), initEnumItem("RGFW_keyB", 98)])
+    let code = gen.generateEnum(resolvedEnum)
+    check "RGFW_key" in code
+    check "(unnamed" notin code
+
+  test "Feature C: anonymous enum fullyQualified skips importc":
+    let cfg = defaultConfig()
+    let gen = initNimCodeGenerator(cfg)
+    # Enum with valid name but anonymous fullyQualified
+    let anonEnum = initEnumDecl(
+      "MyKeys", "(unnamed at test.h:5:1)", "unsigned int",
+      @[initEnumItem("KEY_A", 1), initEnumItem("KEY_B", 2)])
+    let code = gen.generateEnum(anonEnum)
+    check code.len > 0
+    check "MyKeys" in code
+    # importc/importcpp should be omitted for anonymous enums
+    check "importc" notin code
+    check "importcpp" notin code
+
+  test "Bug 5: ignored type fields generate padding":
+    var cfg = defaultConfig()
+    cfg.ignoreTypes = @["InternalData"]
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    let incl = "sample_bugfixes.h"
+    for s in header.structs:
+      if s.name == "MyStruct":
+        let code = gen.generateStruct(s, incl)
+        # Should have padding instead of InternalData field
+        check "padding" in code
+        check "array[" in code
+        check "byte]" in code
+        # Should still have non-ignored fields
+        check "id" in code
+        check "value" in code
+
+  test "Bug 5: field sizeBytes is captured by parser":
+    let cfg = defaultConfig()
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_bugfixes.h")
+    for s in header.structs:
+      if s.name == "MyStruct":
+        for field in s.fields:
+          if field.name == "internal":
+            check field.sizeBytes > 0  # InternalData has known size
 
 
 when isMainModule:

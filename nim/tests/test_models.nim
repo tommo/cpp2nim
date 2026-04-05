@@ -73,12 +73,28 @@ suite "FieldDecl":
     let f = initFieldDecl("data", "union{}", true)
     check f.isAnonymous == true
 
+  test "field with sizeBytes":
+    let f = initFieldDecl("data", "MyType", sizeBytes = 16)
+    check f.sizeBytes == 16
+
+  test "default sizeBytes is 0":
+    let f = initFieldDecl("x", "int")
+    check f.sizeBytes == 0
+
   test "JSON round-trip":
     let f = initFieldDecl("ptr", "void*")
     let j = %f
     let restored = toFieldDecl(j)
     check restored.name == f.name
     check restored.typeName == f.typeName
+
+  test "JSON round-trip with sizeBytes":
+    let f = initFieldDecl("data", "MyType", sizeBytes = 24)
+    let j = %f
+    check j.hasKey("size_bytes")
+    check j["size_bytes"].getInt == 24
+    let restored = toFieldDecl(j)
+    check restored.sizeBytes == 24
 
 suite "TemplateParam":
   test "simple param":

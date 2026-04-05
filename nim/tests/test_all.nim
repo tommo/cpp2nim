@@ -13,6 +13,7 @@ import test_models
 
 when defined(useLibclang):
   import test_parser
+  import test_codegen
 
 when isMainModule:
   echo repeat("=", 60)

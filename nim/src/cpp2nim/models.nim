@@ -51,10 +51,12 @@ type
     ##   typeName: The C++ type.
     ##   isAnonymous: Whether this field's type is an anonymous struct/union.
     ##   nestedFields: For anonymous struct fields, the fields of the nested struct.
+    ##   sizeBytes: Size of the field's type in bytes (0 = unknown). Used for padding.
     name*: string
     typeName*: string
     isAnonymous*: bool
     nestedFields*: seq[FieldDecl]
+    sizeBytes*: int
 
   TemplateParam* = object
     ## A template parameter - either just a name or a (name, type) pair.
@@ -244,8 +246,8 @@ proc initEnumDecl*(name, fullyQualified, underlyingType: string,
   EnumDecl(name: name, fullyQualified: fullyQualified,
            underlyingType: underlyingType, items: items, comment: comment)
 
-proc initFieldDecl*(name, typeName: string, isAnonymous = false, nestedFields: seq[FieldDecl] = @[]): FieldDecl =
-  FieldDecl(name: name, typeName: typeName, isAnonymous: isAnonymous, nestedFields: nestedFields)
+proc initFieldDecl*(name, typeName: string, isAnonymous = false, nestedFields: seq[FieldDecl] = @[], sizeBytes: int = 0): FieldDecl =
+  FieldDecl(name: name, typeName: typeName, isAnonymous: isAnonymous, nestedFields: nestedFields, sizeBytes: sizeBytes)
 
 proc initTemplateParam*(name: string, typeName = none(string)): TemplateParam =
   TemplateParam(name: name, typeName: typeName)
@@ -346,6 +348,8 @@ proc `%`*(f: FieldDecl): JsonNode =
   result = %*{"name": f.name, "type_name": f.typeName, "is_anonymous": f.isAnonymous}
   if f.nestedFields.len > 0:
     result["nested_fields"] = %f.nestedFields
+  if f.sizeBytes > 0:
+    result["size_bytes"] = %f.sizeBytes
 
 proc `%`*(t: TemplateParam): JsonNode =
   if t.typeName.isSome:
@@ -496,7 +500,8 @@ proc toFieldDecl*(node: JsonNode): FieldDecl =
     name: node["name"].getStr,
     typeName: node["type_name"].getStr,
     isAnonymous: node{"is_anonymous"}.getBool(false),
-    nestedFields: nestedFields
+    nestedFields: nestedFields,
+    sizeBytes: node{"size_bytes"}.getInt(0)
   )
 
 proc toTemplateParam*(node: JsonNode): TemplateParam =
@@ -754,6 +759,8 @@ proc toLegacyDict*(f: FieldDecl): JsonNode =
     for nf in f.nestedFields:
       nested.add(toLegacyDict(nf))
     result["nested_fields"] = nested
+  if f.sizeBytes > 0:
+    result["size_bytes"] = %f.sizeBytes
 
 proc fromLegacyFieldDict*(data: JsonNode): FieldDecl =
   ## Create from legacy dict format.
@@ -765,7 +772,8 @@ proc fromLegacyFieldDict*(data: JsonNode): FieldDecl =
     name: data{"name"}.getStr(""),
     typeName: data{"type"}.getStr(""),
     isAnonymous: data{"is_anonymous"}.getBool(false),
-    nestedFields: nestedFields
+    nestedFields: nestedFields,
+    sizeBytes: data{"size_bytes"}.getInt(0)
   )
 
 proc toLegacyDict*(s: StructDecl): JsonNode =
