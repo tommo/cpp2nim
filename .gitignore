@@ -1,2 +1,9 @@
 *.pyc
 .DS_Store
+
+# Generated output
+nim/examples/**/output/
+nim/examples/**/generated/
+nim/tests/test_all
+**/parsed.json
+**/.cpp2nim_cache.json
