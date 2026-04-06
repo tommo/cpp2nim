@@ -487,14 +487,14 @@ proc parseStructInner(v: var CppAstVisitor, node: CXCursor): StructDecl =
       if sourceText.len > 0 and "*" in sourceText and "(" in sourceText:
         let realName = extractFunctionPointerFieldName(sourceText)
         if realName.len > 0 and realName != name and ',' notin realName and ' ' notin realName:
-          fields[i] = initFieldDecl(realName, fieldType, fields[i].isAnonymous)
+          fields[i] = initFieldDecl(realName, fieldType, fields[i].isAnonymous, sizeBytes = fields[i].sizeBytes)
 
   # Post-process: capture nested fields for anonymous struct/union fields
   for i in 0..<fields.len:
     if fields[i].isAnonymous and fields[i].name.len > 0:
       let nestedFields = getNestedFieldsFromAnonymousStruct(fieldCursors[i])
       if nestedFields.len > 0:
-        fields[i] = initFieldDecl(fields[i].name, fields[i].typeName, true, nestedFields)
+        fields[i] = initFieldDecl(fields[i].name, fields[i].typeName, true, nestedFields, sizeBytes = fields[i].sizeBytes)
 
   let spelling = toNimStr(getCursorSpelling(node))
   let fullyQual = getFullyQualifiedName(node)
@@ -578,7 +578,9 @@ proc visitClassDecl(v: var CppAstVisitor, node: CXCursor) =
         # Check if the field's TYPE is an anonymous struct/union
         let typeDecl = getTypeDeclaration(getCursorType(cursor))
         let isAnon = Cursor_isAnonymous(typeDecl) != 0
-        data.fields[].add(initFieldDecl(fieldName, fieldType, isAnon))
+        let fieldSize = Type_getSizeOf(getCursorType(cursor))
+        let sizeBytes = if fieldSize >= 0: int(fieldSize) else: 0
+        data.fields[].add(initFieldDecl(fieldName, fieldType, isAnon, sizeBytes = sizeBytes))
         data.fieldCursors[].add(cursor)
     else:
       discard
@@ -724,7 +726,7 @@ proc visitTypedefDecl(v: var CppAstVisitor, node: CXCursor) =
 
   let spelling = toNimStr(getCursorSpelling(node))
   let underlyingType = getTypedefDeclUnderlyingType(node)
-  let underlying = toNimStr(getTypeSpelling(underlyingType))
+  var underlying = toNimStr(getTypeSpelling(underlyingType))
   let underlyingDeps = getTemplateDependencies(underlying)
   let params = getParamsFromNode(node, v.ctx[].fileCache)
 
@@ -740,6 +742,14 @@ proc visitTypedefDecl(v: var CppAstVisitor, node: CXCursor) =
     if pointee.kind == CXType_FunctionProto:
       resultType = some(toNimStr(getTypeSpelling(getResultType(pointee))))
       typedefKind = some("function")
+    else:
+      # Check if pointing to a forward-declared-only struct (opaque handle pattern)
+      let pointeeDecl = getTypeDeclaration(pointee)
+      if pointeeDecl.kind in {CXCursor_StructDecl, CXCursor_UnionDecl}:
+        if isCursorDefinition(pointeeDecl) == 0:
+          # This is a typedef to a pointer to a forward-declared struct
+          # Mark as opaque handle so generator can emit = pointer
+          underlying = "void *"
   elif kind == CXType_FunctionProto:
     resultType = some(toNimStr(getTypeSpelling(getResultType(underlyingType))))
     typedefKind = some("function")

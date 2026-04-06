@@ -54,13 +54,6 @@ const BasicTypeMap* = {
   "std::uint64_t": "uint64",
   "std::size_t": "csize_t",
   "std::ptrdiff_t": "int",
-  # unsigned types
-  "unsigned int": "cuint",
-  "unsigned char": "cuchar",
-  "unsigned short": "cushort",
-  "unsigned long": "culong",
-  "unsigned long long": "culonglong",
-  "signed char": "cschar",
 }.toTable
 
 let templatePattern = re"([^<]+)[<]*([^>]*)[>]*"
@@ -78,7 +71,8 @@ proc getNimArrayType*(cType: string, rename: Table[string, string]): string
 proc getNimProcType*(cType: string, rename: Table[string, string], isConst: bool = false): string
 
 proc getNimType*(cType: string, rename: Table[string, string] = initTable[string, string](),
-                 returnType: bool = false): string =
+                 returnType: bool = false,
+                 ignoreTypes: HashSet[string] = initHashSet[string]()): string =
   ## Convert a C++ type to its Nim equivalent.
   var cType = normalizePtrType(cType)
 
@@ -261,8 +255,20 @@ proc getNimType*(cType: string, rename: Table[string, string] = initTable[string
   # Handle pointers
   if cType.len > 0:
     while cType.endsWith("*"):
-      var inner = cType[0..^2]
-      inner = getNimType(inner, rename)
+      var inner = cType[0..^2].strip()
+      # If the inner type is in ignoreTypes, collapse to opaque pointer
+      if ignoreTypes.len > 0:
+        var baseInner = inner.replace("const", "").replace("struct", "").replace("union", "").strip()
+        let ltIdx = baseInner.find('<')
+        if ltIdx > 0:
+          baseInner = baseInner[0..<ltIdx].strip()
+        let lastColon = baseInner.rfind("::")
+        if lastColon >= 0:
+          baseInner = baseInner[lastColon + 2 .. ^1]
+        if baseInner in ignoreTypes:
+          cType = "pointer"
+          break
+      inner = getNimType(inner, rename, ignoreTypes = ignoreTypes)
       cType = "ptr " & inner
 
   # Final type fixups
@@ -429,10 +435,12 @@ proc shouldIgnoreType*(gen: NimCodeGenerator, typeName: string): bool =
   ## only types that have NO CONVERSION should trigger ignore.
   var baseType = typeName.strip()
 
-  # Strip pointer/reference qualifiers and const
+  # Don't ignore pointer-to-ignored-type — getNimType converts these to `pointer`
+  if baseType.endsWith("*") or baseType.endsWith("&"):
+    return false
+
+  # Strip const qualifier
   baseType = baseType.replace("const", "")
-  baseType = baseType.replace("*", "")
-  baseType = baseType.replace("&", "")
   baseType = baseType.replace("  ", " ")  # collapse double spaces
   baseType = baseType.strip()
 
@@ -465,7 +473,7 @@ proc generateParams*(gen: NimCodeGenerator, params: seq[Parameter]): string =
     var name = if param.name.len > 0: param.name else: "a" & align($i, 2, '0')
     name = cleanIdentifier(name)
 
-    var typeStr = getNimType(param.typeName, gen.rename)
+    var typeStr = getNimType(param.typeName, gen.rename, ignoreTypes = gen.ignoreTypes)
 
     if param.defaultValue.isSome and not typeStr.startsWith("array"):
       var default = param.defaultValue.get
@@ -489,14 +497,15 @@ proc generateParamsForConstructor*(gen: NimCodeGenerator, params: seq[Parameter]
     var name = if param.name.len > 0: param.name else: "a" & align($i, 2, '0')
     name = cleanIdentifier(name)
 
-    let typeStr = getNimType(param.typeName, gen.rename)
+    let typeStr = getNimType(param.typeName, gen.rename, ignoreTypes = gen.ignoreTypes)
     let hasDefault = param.defaultValue.isSome
 
     let prefix = if i > 0: ", " else: ""
     result.add((prefix & name & ": " & typeStr, hasDefault))
 
 
-proc generateEnum*(gen: NimCodeGenerator, enumDecl: EnumDecl, incl: string = ""): string =
+proc generateEnum*(gen: NimCodeGenerator, enumDecl: EnumDecl, incl: string = "",
+                   isTypedef: bool = false): string =
   ## Generate Nim enum declaration.
   # Skip if enum name is in ignoreTypes or has no items
   if gen.shouldIgnoreType(enumDecl.name) or gen.shouldIgnoreType(enumDecl.fullyQualified):
@@ -533,10 +542,12 @@ proc generateEnum*(gen: NimCodeGenerator, enumDecl: EnumDecl, incl: string = "")
   # Skip importc for anonymous enums (no valid C tag name)
   let isAnonymous = enumDecl.fullyQualified.contains("(unnamed") or
                     enumDecl.fullyQualified.contains("(anonymous")
+  # In C mode, typedef'd enums don't need "enum" prefix in importc
   let importPragmaStr = if isAnonymous:
     ""
   elif gen.config.cMode:
-    "importc: \"enum " & enumDecl.fullyQualified & "\", "
+    let enumPrefix = if isTypedef: "" else: "enum "
+    "importc: \"" & enumPrefix & enumDecl.fullyQualified & "\", "
   else:
     "importcpp: \"" & enumDecl.fullyQualified & "\", "
 
@@ -579,7 +590,8 @@ proc generateInlineNestedFields(gen: NimCodeGenerator, field: FieldDecl,
 
 
 proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "",
-                     inheritable: bool = false, nofield: bool = false): string =
+                     inheritable: bool = false, nofield: bool = false,
+                     isTypedef: bool = false): string =
   ## Generate Nim struct/object declaration.
   # Skip anonymous structs/unions
   if struct.name.len == 0 or struct.name.startsWith("(anonymous"):
@@ -630,7 +642,10 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
   elif struct.name in gen.baseClasses or struct.fullyQualified in gen.baseClasses:
     inheritance = " of RootObj"
 
-  let cPrefix = if struct.isUnion: "union " else: "struct "
+  # In C mode, typedef'd types don't need struct/union prefix in importc
+  let cPrefix = if not gen.config.cMode or isTypedef: ""
+                elif struct.isUnion: "union "
+                else: "struct "
   let (importPragma, cName) = if gen.config.cMode:
     ("importc", cPrefix & struct.fullyQualified)
   else:
@@ -677,9 +692,9 @@ proc generateStruct*(gen: NimCodeGenerator, struct: StructDecl, incl: string = "
 
       if usesTemplateParam:
         # Use the template parameter directly for fields
-        tname = getNimType(tname, gen.rename)
+        tname = getNimType(tname, gen.rename, ignoreTypes = gen.ignoreTypes)
       else:
-        tname = getNimType(tname, gen.rename)
+        tname = getNimType(tname, gen.rename, ignoreTypes = gen.ignoreTypes)
 
       if fname.endsWith("_"):
         result.add("    " & fname[0..^2] & "* {.importcpp:\"" & fname & "\".}: " & tname & "\n")
@@ -760,7 +775,7 @@ proc generateClass*(gen: NimCodeGenerator, cls: ClassDecl, incl: string = "",
         result.add(gen.generateInlineNestedFields(field, fname, field.name, templateParamNames, gen.config.cMode))
         continue
 
-      let tname = getNimType(field.typeName, gen.rename)
+      let tname = getNimType(field.typeName, gen.rename, ignoreTypes = gen.ignoreTypes)
 
       if fname.endsWith("_"):
         result.add("    " & fname[0..^2] & "* {.importcpp:\"" & fname & "\".}: " & tname & "\n")
@@ -901,7 +916,7 @@ proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
     let isRef = resultType.endsWith("&")
     if isRef:
       resultType = resultType[0..^2].strip()
-    resultType = getNimType(resultType, gen.rename, returnType = true)
+    resultType = getNimType(resultType, gen.rename, returnType = true, ignoreTypes = gen.ignoreTypes)
     if isRef:
       resultType = "var " & resultType
       importMethod = "importcpp"
@@ -973,7 +988,7 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
         # For anonymous typedef structs, use the typedef name
         structData.name = typedef.name
         structData.fullyQualified = typedef.fullyQualified
-        return gen.generateStruct(structData, incl)
+        return gen.generateStruct(structData, incl, isTypedef = true)
       else:
         # Regular struct typedef - generate the struct
         # Apply suffix stripping to struct name (e.g., mjData_ -> mjData)
@@ -987,7 +1002,7 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
           else:
             structData.fullyQualified = strippedStructName
 
-        result = gen.generateStruct(structData, incl)
+        result = gen.generateStruct(structData, incl, isTypedef = true)
 
         # If typedef name differs from struct name (after cleaning), generate an alias
         # Skip alias if names match after cleanIdentifier (e.g., mjData_ -> mjData matches typedef mjData)
@@ -1000,10 +1015,10 @@ proc generateTypedef*(gen: NimCodeGenerator, typedef: TypedefDecl, incl: string 
         return result
 
     if typedef.typedefKind.get == "enum" and typedef.enumData.isSome:
-      return gen.generateEnum(typedef.enumData.get, incl)
+      return gen.generateEnum(typedef.enumData.get, incl, isTypedef = true)
 
   let underlying = typedef.underlying
-  let nimType = getNimType(underlying, gen.rename)
+  let nimType = getNimType(underlying, gen.rename, ignoreTypes = gen.ignoreTypes)
 
   let includePragma = if incl.len > 0: "header: \"" & incl & "\", " else: ""
   let name = cleanIdentifier(typedef.name)

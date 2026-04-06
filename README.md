@@ -1,6 +1,8 @@
 # cpp2nim
 
-A clang-based C++ to Nim binding generator. Parses C++ headers using libclang and generates Nim FFI bindings with proper `{.importcpp.}` pragmas.
+A clang-based C/C++ to Nim binding generator. Parses C/C++ headers using libclang and generates Nim FFI bindings with proper `{.importcpp.}` / `{.importc.}` pragmas.
+
+Rewritten in Nim from the original [cpp2nim Python script](https://github.com/mantielero/cpp2nim) by [@mantielero](https://github.com/mantielero).
 
 > **Note**: This tool generates bindings that will likely need manual adjustments, but should get you much closer to working code than starting from scratch.
 

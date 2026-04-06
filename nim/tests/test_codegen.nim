@@ -4,14 +4,22 @@
 ## Requires libclang. Run with:
 ##   nim c -d:useLibclang -r tests/test_codegen.nim
 
-import std/[unittest, os, sets, tables, osproc, times, streams, strutils]
+import std/[unittest, os, sets, tables, osproc, times, streams, strutils, options]
 import ../src/cpp2nim/[parser, models, config, generator]
 
 const FixturesDir = currentSourcePath().parentDir / "fixtures"
 
 proc generateCode(header: ParsedHeader, cfg: Config, filename: string): string =
   ## Generate Nim code from parsed header.
-  let gen = initNimCodeGenerator(cfg)
+  # Pre-scan for base classes so inheritance generates correctly
+  var baseClasses: HashSet[string]
+  for s in header.structs:
+    for bt in s.baseTypes:
+      baseClasses.incl(bt)
+  for c in header.classes:
+    for bt in c.baseTypes:
+      baseClasses.incl(bt)
+  let gen = initNimCodeGenerator(cfg, baseClasses = baseClasses)
   let incl = extractFilename(filename)
 
   # Collect types
@@ -237,6 +245,82 @@ suite "Bug fixes - output validation":
         for field in s.fields:
           if field.name == "internal":
             check field.sizeBytes > 0  # InternalData has known size
+
+
+  test "Bug 12: typedef'd struct has no 'struct' prefix in importc (C mode)":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    let incl = "sample_c_bugfixes.h"
+    for t in header.typedefs:
+      if t.name == "CSize" and t.typedefKind.isSome and t.typedefKind.get == "struct":
+        let code = gen.generateTypedef(t, incl)
+        check "importc: \"CSize\"" in code
+        check "importc: \"struct " notin code
+
+  test "Bug 12: typedef'd enum has no 'enum' prefix in importc (C mode)":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    let incl = "sample_c_bugfixes.h"
+    for t in header.typedefs:
+      if t.name == "CMode" and t.typedefKind.isSome and t.typedefKind.get == "enum":
+        let code = gen.generateTypedef(t, incl)
+        check "importc: \"CMode\"" in code
+        check "importc: \"enum " notin code
+
+  test "Bug 12: non-typedef'd struct keeps 'struct' prefix in importc (C mode)":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    let incl = "sample_c_bugfixes.h"
+    for s in header.structs:
+      if s.name == "IgnoredInner":
+        let code = gen.generateStruct(s, incl)
+        check "importc: \"struct IgnoredInner\"" in code
+
+  test "Bug 13: opaque handle typedef becomes pointer":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    let incl = "sample_c_bugfixes.h"
+    for t in header.typedefs:
+      if t.name == "CHandle":
+        let code = gen.generateTypedef(t, incl)
+        check "= pointer" in code
+        check "_CHandle_t" notin code
+
+  test "Bug 7: ptr IgnoredType in params becomes pointer":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    cfg.ignoreTypes = @["PlatformData"]
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    var visited: HashSet[string]
+    for m in header.methods:
+      if m.name == "usesPlatformPtr":
+        let code = gen.generateMethod(m, visited, @[])
+        check "pointer" in code
+        check "PlatformData" notin code
+
+  test "Bug 15: unsigned char maps to uint8 not cuchar":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let code = generateCode(header, cfg, "sample_c_bugfixes.h")
+    check "cuchar" notin code
+    # uint8 should appear for the color fields
+    check "uint8" in code
 
 
 when isMainModule:
