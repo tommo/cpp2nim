@@ -4,6 +4,8 @@ A clang-based C/C++ to Nim binding generator. Parses C/C++ headers using libclan
 
 Rewritten in Nim from the original [cpp2nim Python script](https://github.com/mantielero/cpp2nim) by [@mantielero](https://github.com/mantielero).
 
+> **Note**: Only tested on macOS. Linux may work but is untested.
+
 > **Note**: This tool generates bindings that will likely need manual adjustments, but should get you much closer to working code than starting from scratch.
 
 ## Installation
