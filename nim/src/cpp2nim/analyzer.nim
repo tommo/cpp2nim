@@ -190,6 +190,16 @@ proc computeSharedTypes(self: DependencyAnalyzer, parseResult: ParseResult,
     for d in deps:
       allShared.incl(d)
 
+  # Auto-promote incomplete (forward-declared) types that appear in multiple files
+  var typeFiles: Table[string, int]  # fullyQualified -> file count
+  for _, header in parseResult.headers:
+    for s in header.structs:
+      if s.isIncomplete:
+        typeFiles.mgetOrPut(s.fullyQualified, 0).inc
+  for typeName, count in typeFiles:
+    if count > 1:
+      allShared.incl(typeName)
+
   # Add forced shared types from config
   for t in self.config.forceSharedTypes:
     allShared.incl(t)

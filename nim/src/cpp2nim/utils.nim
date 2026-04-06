@@ -81,6 +81,13 @@ proc cleanTypeName*(typeName: string): string =
   # Remove trailing & or * (and preceding space if any)
   while result.len > 0 and result[^1] in {'&', '*', ' '}:
     result = result[0..^2]
+  # Remove C struct/union/enum tag prefixes
+  if result.startsWith("struct "):
+    result = result[7..^1]
+  elif result.startsWith("union "):
+    result = result[6..^1]
+  elif result.startsWith("enum "):
+    result = result[5..^1]
   result = result.strip()
 
 
