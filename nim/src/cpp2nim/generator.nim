@@ -860,6 +860,12 @@ proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,
   if methodName.len > 0 and gen.config.camelCase:
     methodName = methodName[0].toLowerAscii() & methodName[1..^1]
 
+  # Avoid name collision with return type (e.g., C function ggml_backend_dev_type
+  # returning enum ggml_backend_dev_type)
+  let cleanReturn = cleanTypeName(meth.returnType).split("::")[ ^1]
+  if methodName == cleanReturn:
+    methodName = "get_" & methodName
+
   # Handle varargs
   var params = meth.params
   var hasValist = false

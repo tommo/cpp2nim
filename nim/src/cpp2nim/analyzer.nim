@@ -190,12 +190,15 @@ proc computeSharedTypes(self: DependencyAnalyzer, parseResult: ParseResult,
     for d in deps:
       allShared.incl(d)
 
-  # Auto-promote incomplete (forward-declared) types that appear in multiple files
+  # Auto-promote types that appear in multiple files to avoid duplicate definitions
   var typeFiles: Table[string, int]  # fullyQualified -> file count
   for _, header in parseResult.headers:
     for s in header.structs:
-      if s.isIncomplete:
-        typeFiles.mgetOrPut(s.fullyQualified, 0).inc
+      typeFiles.mgetOrPut(s.fullyQualified, 0).inc
+    for e in header.enums:
+      typeFiles.mgetOrPut(e.fullyQualified, 0).inc
+    for t in header.typedefs:
+      typeFiles.mgetOrPut(t.fullyQualified, 0).inc
   for typeName, count in typeFiles:
     if count > 1:
       allShared.incl(typeName)
@@ -255,9 +258,8 @@ proc computeImports(self: DependencyAnalyzer, parseResult: ParseResult,
   for filename, deps in relationships:
     var fileImports: HashSet[string]
     for depFile in deps.keys:
-      # Convert path to module name
-      let basename = extractFilename(depFile)
-      let moduleName = basename.changeFileExt("")
+      # Convert path to module name (replace dashes for valid Nim identifiers)
+      let moduleName = extractFilename(depFile).changeFileExt("").replace("-", "_")
       fileImports.incl(moduleName)
     result[filename] = fileImports
 

@@ -6,6 +6,11 @@ import std/[os, strutils, parseopt, tables, sets, json, times, terminal, options
 import cpp2nim/[models, config, analyzer, generator, parser, postprocess, cache]
 
 
+proc toNimModuleName(filename: string): string =
+  ## Convert a header filename to a valid Nim module name.
+  ## Replaces dashes with underscores since Nim can't import dash-named modules.
+  extractFilename(filename).changeFileExt("").replace("-", "_")
+
 const
   Version = "0.1.0"
 
@@ -431,7 +436,8 @@ proc generatePerFileBindings(parseResult: ParseResult, analysis: AnalysisResult,
   var filesGenerated = 0
 
   for filename, header in parseResult.headers:
-    let basename = extractFilename(filename).changeFileExt(".nim")
+    let moduleName = toNimModuleName(filename)
+    let basename = moduleName & ".nim"
     let outputPath = outputDir / basename
 
     var code = "# Auto-generated Nim bindings for " & filename & "\n"
@@ -443,7 +449,7 @@ proc generatePerFileBindings(parseResult: ParseResult, analysis: AnalysisResult,
       imports.add("shared_types")
     if filename in analysis.importGraph:
       for imp in analysis.importGraph[filename]:
-        if imp notin imports and imp != basename.changeFileExt(""):
+        if imp notin imports and imp != moduleName:
           imports.add(imp)
     if imports.len > 0:
       code.add("import " & imports.join(", ") & "\n\n")
@@ -530,7 +536,7 @@ proc showPostGenerationTips(parseResult: ParseResult, outputDir: string,
     echo "  import ./shared_types"
     echo "  export shared_types"
   for filename, _ in parseResult.headers:
-    let modName = extractFilename(filename).changeFileExt("")
+    let modName = toNimModuleName(filename)
     echo "  import ./" & modName
     echo "  export " & modName
     break
@@ -646,7 +652,7 @@ proc cmdGenerateBindings(opts: CliOptions, cfg: Config): int =
 
   var filesGenerated = 0
   for filename, header in parseResult.headers:
-    let basename = extractFilename(filename).changeFileExt(".nim")
+    let basename = toNimModuleName(filename) & ".nim"
     let outputPath = outputDir / basename
 
     var code = "# Auto-generated Nim bindings for " & filename & "\n"
