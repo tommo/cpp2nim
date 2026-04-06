@@ -323,6 +323,40 @@ suite "Bug fixes - output validation":
     check "uint8" in code
 
 
+  test "Forward-declared structs generate incompleteStruct":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    # Parser should capture forward-declared struct
+    var found = false
+    for s in header.structs:
+      if s.name == "ForwardDeclared":
+        found = true
+        check s.isIncomplete
+    check found
+    # Generator should produce incompleteStruct object
+    let gen = initNimCodeGenerator(cfg)
+    let incl = "sample_c_bugfixes.h"
+    for s in header.structs:
+      if s.name == "ForwardDeclared":
+        let code = gen.generateStruct(s, incl)
+        check "incompleteStruct" in code
+        check "= object" in code
+
+  test "Forward-declared struct usable as ptr in function params":
+    var cfg = defaultConfig()
+    cfg.cMode = true
+    let p = initCppHeaderParser(cfg)
+    let header = p.parseFile(FixturesDir / "sample_c_bugfixes.h")
+    let gen = initNimCodeGenerator(cfg)
+    var visited: HashSet[string]
+    for m in header.methods:
+      if m.name == "usesForwardDecl":
+        let code = gen.generateMethod(m, visited, @[])
+        check "ptr ForwardDeclared" in code
+
+
 when isMainModule:
   echo "Running codegen tests..."
   echo "Fixtures dir: ", FixturesDir

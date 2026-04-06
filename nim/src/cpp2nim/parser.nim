@@ -521,10 +521,19 @@ proc visitStructDecl(v: var CppAstVisitor, node: CXCursor) =
   let access = getCXXAccessSpecifier(node)
   if access == CX_CXXPrivate:
     return
-  if isCursorDefinition(node) == 0:
-    return
   let spelling = toNimStr(getCursorSpelling(node))
   if spelling.startsWith("(unnamed"):
+    return
+
+  if isCursorDefinition(node) == 0:
+    # Forward declaration — capture as incomplete struct so types like
+    # ptr ggml_context have a valid declaration in the output
+    let fullyQual = getFullyQualifiedName(node)
+    let isUnion = node.kind == CXCursor_UnionDecl
+    v.structs.add(initStructDecl(
+      name = spelling, fullyQualified = fullyQual,
+      isIncomplete = true, isUnion = isUnion))
+    v.ctx[].visitedStructs.incl(nodeHash)
     return
 
   var structData = v.parseStructInner(node)
@@ -743,13 +752,16 @@ proc visitTypedefDecl(v: var CppAstVisitor, node: CXCursor) =
       resultType = some(toNimStr(getTypeSpelling(getResultType(pointee))))
       typedefKind = some("function")
     else:
-      # Check if pointing to a forward-declared-only struct (opaque handle pattern)
+      # Check if pointing to a forward-declared-only struct with internal name
+      # (opaque handle pattern: typedef struct _Foo_t* Foo)
       let pointeeDecl = getTypeDeclaration(pointee)
       if pointeeDecl.kind in {CXCursor_StructDecl, CXCursor_UnionDecl}:
         if isCursorDefinition(pointeeDecl) == 0:
-          # This is a typedef to a pointer to a forward-declared struct
-          # Mark as opaque handle so generator can emit = pointer
-          underlying = "void *"
+          let pointeeName = toNimStr(getCursorSpelling(pointeeDecl))
+          # Only collapse to pointer for internal/private names (e.g. _IPLContext_t)
+          # Public forward-declared types (e.g. ggml_context) should keep their identity
+          if pointeeName.startsWith("_"):
+            underlying = "void *"
   elif kind == CXType_FunctionProto:
     resultType = some(toNimStr(getTypeSpelling(getResultType(underlyingType))))
     typedefKind = some("function")

@@ -36,6 +36,10 @@ typedef enum {
 struct _CHandle_t;
 typedef struct _CHandle_t* CHandle;
 
+// Forward-declared struct used in function params (ggml_context pattern)
+struct ForwardDeclared;
+void usesForwardDecl(struct ForwardDeclared *ctx);
+
 // Bug 7: ignored type used as pointer param
 struct PlatformData {
     int internal[8];
