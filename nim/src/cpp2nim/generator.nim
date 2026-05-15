@@ -478,12 +478,14 @@ proc generateParams*(gen: NimCodeGenerator, params: seq[Parameter]): string =
     if param.defaultValue.isSome and not typeStr.startsWith("array"):
       var default = param.defaultValue.get
       if default != "nil" and not default.startsWith("{"):
+        if "::" in default:
+          default = default.rsplit("::", 1)[^1]
         if typeStr.endsWith("Enum") and default != "nil":
           default = typeStr & "." & default
-        default = default.replace("|", " or ")
         default = default.replace("||", " or ")
-        default = default.replace("&", " and ")
         default = default.replace("&&", " and ")
+        default = default.replace("|", " or ")
+        default = default.replace("&", " and ")
         typeStr = typeStr & " = " & default
 
     parts.add(name & ": " & typeStr)
@@ -830,18 +832,25 @@ proc generateConstructor*(gen: NimCodeGenerator, ctor: ConstructorDecl,
 
 
 proc detectTemplateParams(signature: string): seq[string] =
-  ## Detect single-letter template parameters (T, U, V, etc.) in a type signature.
-  ## Returns list of template params found.
+  ## Detect single-letter template parameters in a type signature.
+  proc isIdentChar(c: char): bool {.inline.} =
+    c.isAlphaNumeric or c == '_'
+
   var found: HashSet[string]
-  # Common template parameter names
   const templateParamNames = ["T", "U", "V", "K", "N", "M", "S", "R", "E", "A", "B", "C", "D"]
   for param in templateParamNames:
-    # Look for standalone param: " T", ": T", "[T", ",T", "<T" or just "T" at word boundaries
-    if (" " & param) in signature or (":" & param) in signature or
-       ("[" & param) in signature or ("," & param) in signature or
-       (signature == param) or signature.endsWith(" " & param) or
-       signature.endsWith(":" & param):
-      found.incl(param)
+    let needle = param[0]
+    var i = 0
+    while i < signature.len:
+      let idx = signature.find(needle, i)
+      if idx < 0:
+        break
+      let prevOk = idx == 0 or not isIdentChar(signature[idx - 1])
+      let nextOk = idx == signature.len - 1 or not isIdentChar(signature[idx + 1])
+      if prevOk and nextOk:
+        found.incl(param)
+        break
+      i = idx + 1
   result = found.toSeq.sorted
 
 proc generateMethod*(gen: NimCodeGenerator, meth: MethodDecl,

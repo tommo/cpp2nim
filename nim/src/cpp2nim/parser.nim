@@ -271,6 +271,39 @@ proc canVisit(v: CppAstVisitor, node: CXCursor): bool =
   let nodePath = toNimStr(getFileName(file))
   return nodePath == v.filename
 
+proc extractParamDefault(cursor: CXCursor): Option[string] =
+  ## Tokenize the parameter declaration and return whatever follows `=`.
+  let tu = Cursor_getTranslationUnit(cursor)
+  if tu == nil:
+    return none(string)
+  let extent = getCursorExtent(cursor)
+  var tokens: ptr CXToken
+  var n: cuint
+  tokenize(tu, extent, addr tokens, addr n)
+  if tokens == nil or n == 0:
+    return none(string)
+  defer: disposeTokens(tu, tokens, n)
+
+  var eqIdx = -1
+  for i in 0..<n.int:
+    let t = cast[ptr CXToken](cast[uint](tokens) + (i.uint * sizeof(CXToken).uint))
+    let spell = toNimStr(getTokenSpelling(tu, t[]))
+    if spell == "=":
+      eqIdx = i
+      break
+  if eqIdx < 0:
+    return none(string)
+
+  var parts: seq[string]
+  for i in (eqIdx + 1)..<n.int:
+    let t = cast[ptr CXToken](cast[uint](tokens) + (i.uint * sizeof(CXToken).uint))
+    let spell = toNimStr(getTokenSpelling(tu, t[]))
+    if spell.len == 0: continue
+    parts.add(spell)
+  if parts.len == 0:
+    return none(string)
+  some(parts.join(""))
+
 proc getParamsFromNode(node: CXCursor, fileCache: var Table[string, seq[string]]): seq[Parameter] =
   ## Extract parameters from a function/method node.
   proc childVisitor(cursor, parent: CXCursor, clientData: CXClientData): CXChildVisitResult {.cdecl.} =
@@ -281,9 +314,9 @@ proc getParamsFromNode(node: CXCursor, fileCache: var Table[string, seq[string]]
     let paramName = toNimStr(getCursorDisplayName(cursor))
     let cursorType = getCursorType(cursor)
     let paramType = getFullyQualifiedType(cursorType)
+    let defaultVal = extractParamDefault(cursor)
 
-    # TODO: Extract default value (complex, requires token parsing)
-    params[].add(initParameter(paramName, paramType, none(string)))
+    params[].add(initParameter(paramName, paramType, defaultVal))
     return CXChildVisit_Continue
 
   discard visitChildren(node, childVisitor, addr result)
