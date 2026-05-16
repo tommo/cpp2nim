@@ -477,8 +477,8 @@ proc generateParams*(gen: NimCodeGenerator, params: seq[Parameter]): string =
 
     if param.defaultValue.isSome and not typeStr.startsWith("array"):
       var default = param.defaultValue.get
-      if default != "nil" and not default.startsWith("{"):
-        if "::" in default:
+      if not default.startsWith("{"):
+        if default != "nil" and "::" in default:
           default = default.rsplit("::", 1)[^1]
         if typeStr.endsWith("Enum") and default != "nil":
           default = typeStr & "." & default

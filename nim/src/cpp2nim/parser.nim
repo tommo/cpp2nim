@@ -302,7 +302,11 @@ proc extractParamDefault(cursor: CXCursor): Option[string] =
     parts.add(spell)
   if parts.len == 0:
     return none(string)
-  some(parts.join(""))
+  var joined = parts.join("")
+  case joined
+  of "NULL", "nullptr": joined = "nil"
+  else: discard
+  some(joined)
 
 proc getParamsFromNode(node: CXCursor, fileCache: var Table[string, seq[string]]): seq[Parameter] =
   ## Extract parameters from a function/method node.

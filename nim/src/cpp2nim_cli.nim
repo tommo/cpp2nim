@@ -303,8 +303,9 @@ proc parseHeaders(files: seq[string], cfg: Config, opts: CliOptions): ParseResul
 proc buildRenames(parseResult: ParseResult, cfg: Config,
                   analysisRenames: Table[string, string]): Table[string, string] =
   ## Build complete rename table from analysis and config.
-  result = cfg.typeRenames
-  for k, v in analysisRenames:
+  ## User-supplied renames win over analyzer-computed renames.
+  result = analysisRenames
+  for k, v in cfg.typeRenames:
     result[k] = v
 
   # Add typedef aliases for template instantiations
