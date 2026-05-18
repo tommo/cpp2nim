@@ -4,7 +4,7 @@ author        = "PIL"
 description   = "C++ to Nim binding generator using libclang"
 license       = "MIT"
 srcDir        = "src"
-bin           = @["cpp2nim_cli"]
+namedBin["cpp2nim_cli"] = "cpp2nim"
 binDir        = "bin"
 
 # Dependencies
